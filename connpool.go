@@ -39,10 +39,30 @@ type bucket struct {
 	capacity int
 	top      *element
 	pool     *Pool
+
+	// The following fields are related to statistics, and the sync.Mutex doesn't
+	// protect them. So any operation on them should be atomic.
+	total int64 // The total number of connections related to this bucket.
+	idle  int64 // The number of idle connections in the bucket.
 }
 
+// pop a connection from the bucket. If the bucket is empty, returns nil.
 func (b *bucket) pop() (conn *Conn) {
+	b.Lock()
+	if stack.size > 0 {
+		conn, b.top = b.top.conn, b.top.next
+		b.size--
+
+		// Although this statement is in the critical region, the 'idle' field is not
+		// protected by the sync.Mutex and can be accessed by outer caller directly.
+		// So we need to use the following atomic operation to handle it.
+		atomic.AddInt64(&b.idle, -1)
+	}
+	b.Unlock()
+	return
 }
+
+var bucketIsFull = errors.New("bucket is full")
 
 func (b *bucket) push(conn *Conn) {
 }
@@ -59,7 +79,7 @@ type element struct {
 // Conn is an implementation of the net.Conn interface. It just wraps the raw
 // connection directly, which rewrites the original Close method.
 type Conn struct {
-	// The raw connection created by the dial function which you
+	// The raw connection created by the dial function which you register.
 	net.Conn
 
 	// The bucket to which this connection binds.
@@ -82,5 +102,6 @@ func (conn *Conn) Close() error {
 
 // Release the underlying connection directly.
 func (conn *Conn) Release() error {
+	atomic.AddInt64(&conn.b.total, -1)
 	return conn.Conn.Close()
 }
