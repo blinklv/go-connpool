@@ -85,7 +85,59 @@ func (b *bucket) push(conn *Conn) (err error) {
 	return
 }
 
+// clean all idle connections in the stack. This operation is more expensive than
+// the pop and the push method. The main problem is this operation will make other
+// methods (push, pop) temporary unavailability when the list is too long. The current
+// strategy is dividing this task into a number of small parts; other methods have
+// a chance to get the lock between two subtasks.
 func (b *bucket) clean(shutdown bool) {
+	for backup := (*element)(nil); ; {
+		if backup = iterate(backup, shutdown); backup == nil {
+			return
+		}
+	}
+}
+
+func (b *bucket) iterate(backup *element, shutdown bool) *element {
+	b.Lock()
+	defer b.Unlock()
+
+	if backup == nil {
+		if b.top != nil {
+			return nil
+		}
+		backup = b.top
+	}
+
+	return b._iterate(backup, shutdown)
+}
+
+// Iterate each connection in the bucket. If the connection's state is active,
+// reset it to idle and push it to the temporary bucket. Otherwise, skip it (of
+// course also release it) and descrease the original bucket's size.
+func (b *bucket) _iterate(backup *element, shutdown bool) *element {
+	// Invariant: the backup parameter isn't nil.
+	var (
+		top, tail *element
+		i         int
+	)
+
+	// We only handle the first 16 connection at once; this will prevent this
+	// loop costs so much time when the list is too long.
+	for tail, i = backup, 0; backup != nil && i < 16; backup, i = backup.next, i+1 {
+		if !shutdown && backup.conn.state == 1 {
+			backup.conn.state = 0
+			// NOTE: Because we push the active connection to the temporary bucket.
+			// which will reverse the elements order in the original bucket..
+			top = &element{conn: backup.conn, next: top}
+		} else {
+			b.size--
+			atomic.AddInt64(&b.idle, -1)
+			conn.Release()
+		}
+	}
+	b.top, tail.next = top, b.top
+	return backup
 }
 
 // The basic element of the bucket.
