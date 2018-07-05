@@ -64,7 +64,25 @@ func (b *bucket) pop() (conn *Conn) {
 
 var bucketIsFull = errors.New("bucket is full")
 
-func (b *bucket) push(conn *Conn) {
+// push a connection to the bucket. If the bucket is full, returns bucketIsFull.
+func (b *bucket) push(conn *Conn) (err error) {
+	b.Lock()
+	if b.size < b.capacity {
+		// When a connection is pushed to the bucket, we think it's used recently.
+		// So we set the state to 1 (active). This operation can't done in the pop
+		// method, because some connections are created directly instead of poping
+		// from the bucket.
+		conn.state = 1
+
+		// Adjust the top and the size.
+		b.top = &element{conn: conn, next: b.top}
+		b.size++
+		atomic.AddInt64(&b.idle, 1)
+	} else {
+		err = bucketIsFull
+	}
+	b.Unlock()
+	return
 }
 
 func (b *bucket) clean(shutdown bool) {
