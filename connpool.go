@@ -3,23 +3,64 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2018-07-05
+// Last Change: 2018-07-06
 
 package connpool
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
+type Dial func(network, address string) (net.Conn, error)
+
 // Pool is a connection pool. It will cache some connections for each address.
 // If a connection is never be used for a long time (mark it as idle), it will
 // be cleaned.
 type Pool struct {
-	rwlock sync.RWMutex
+	rwlock   sync.RWMutex
+	dial     Dial
+	capacity int
+	timeout  time.Duration
+	bs       map[string]*bucket
+}
+
+// Create a connection pool. The 'dial' parameter defines how to create a new
+// connection; I think the net.Dial function is a good choice. The 'capacity'
+// parameter controls the maximum idle connections to keep per-host (not all hosts).
+// The 'timeout' parameter is the maximum amount of time an idle connection will
+// remain idle before closing itself. It can't be less than 1 min in this version;
+// Otherwise, many CPU cycles are occupied by the 'clean' task. I usually set it
+// to 3 ~ 5 min, but if there exist too many resident connections in your program,
+// this value should be larger.
+func New(dial Dial, capacity int, timeout time.Duration) (*Pool, error) {
+	if dial == nil {
+		return nil, fmt.Errorf("dial can't be nil")
+	}
+
+	if capacity < 0 {
+		return nil, fmt.Errorf("capacity (%d) can't be less than zero", capacity)
+	}
+
+	if timeout < time.Minute {
+		return nil, fmt.Errorf("timeout (%s) can't be less than 1 min", timeout)
+	}
+
+	pool := &Pool{
+		dial:     dial,
+		capacity: capacity,
+		timeout:  timeout,
+		bs:       make(map[string]*bucket),
+		exit:     make(chan struct{}),
+	}
+
+	go pool.clean()
+
+	return pool, nil
 }
 
 func (pool *Pool) Get(address string) (net.Conn, error) {
@@ -29,6 +70,9 @@ func (pool *Pool) New(address string) (net.Conn, error) {
 }
 
 func (pool *Pool) Close() error {
+}
+
+func (pool *Pool) clean() {
 }
 
 // bucket is a collection of connections, the internal structure of which is
@@ -85,19 +129,20 @@ func (b *bucket) push(conn *Conn) (err error) {
 	return
 }
 
-// clean all idle connections in the stack. This operation is more expensive than
+// Clean all idle connections in the stack. This operation is more expensive than
 // the pop and the push method. The main problem is this operation will make other
 // methods (push, pop) temporary unavailability when the list is too long. The current
 // strategy is dividing this task into a number of small parts; other methods have
 // a chance to get the lock between two subtasks.
 func (b *bucket) clean(shutdown bool) {
 	for backup := (*element)(nil); ; {
-		if backup = iterate(backup, shutdown); backup == nil {
+		if backup = b.iterate(backup, shutdown); backup == nil {
 			return
 		}
 	}
 }
 
+// Wrap the _iterate method; lock it and initialize the backup parameter.
 func (b *bucket) iterate(backup *element, shutdown bool) *element {
 	b.Lock()
 	defer b.Unlock()
