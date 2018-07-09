@@ -27,6 +27,7 @@ type Pool struct {
 	capacity int
 	timeout  time.Duration
 	bs       map[string]*bucket
+	exit     chan chan struct{}
 }
 
 // Create a connection pool. The 'dial' parameter defines how to create a new
@@ -56,7 +57,7 @@ func New(dial Dial, capacity int, timeout time.Duration) (*Pool, error) {
 		capacity: capacity,
 		timeout:  timeout,
 		bs:       make(map[string]*bucket),
-		exit:     make(chan struct{}),
+		exit:     make(chan chan struct{}),
 	}
 
 	go pool.clean()
@@ -128,6 +129,33 @@ func (pool *Pool) selectBucket(address string) (b *bucket) {
 }
 
 func (pool *Pool) clean() {
+	var (
+		ticker = time.NewTicker(pool.timeout)
+		bs     []*bucket
+	)
+
+	for {
+		select {
+		case <-ticker.C:
+			pool.RLock()
+			for _, b := range pool.bs {
+				// If we invoke bucket's clean method in this for loop it will cause the
+				// Get or the New method waiting for too long when creates a new bucket.
+				bs = append(bs, b)
+			}
+			pool.RUnlock()
+
+			for _, b := range pool.bs {
+				b.clean(true)
+			}
+		case exitDone := <-exit:
+			ticker.Stop()
+			for _, b := range pool.bs {
+				b.clean(true)
+			}
+			close(exitDone)
+		}
+	}
 }
 
 // bucket is a collection of connections, the internal structure of which is
