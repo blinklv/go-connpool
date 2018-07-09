@@ -98,7 +98,13 @@ func (pool *Pool) New(address string) (net.Conn, error) {
 	}
 }
 
+// Close the connection pool. It will release all idle connections in the pool. You
+// shouldn't use this pool anymore after this method has been called.
 func (pool *Pool) Close() error {
+	exitDone := make(chan struct{})
+	pool.exit <- exitDone
+	<-exitDone
+	return nil
 }
 
 // Select a bucket for the address. If it doesn't exist, create a new one.
@@ -128,6 +134,7 @@ func (pool *Pool) selectBucket(address string) (b *bucket) {
 	return
 }
 
+// Clean idle connections periodically.
 func (pool *Pool) clean() {
 	var (
 		ticker = time.NewTicker(pool.timeout)
@@ -166,6 +173,7 @@ type bucket struct {
 	capacity int
 	top      *element
 	pool     *Pool
+	closed   bool
 
 	// The following fields are related to statistics, and the sync.Mutex doesn't
 	// protect them. So any operation on them should be atomic.
@@ -173,10 +181,10 @@ type bucket struct {
 	idle  int64 // The number of idle connections in the bucket.
 }
 
-// pop a connection from the bucket. If the bucket is empty, returns nil.
+// pop a connection from the bucket. If the bucket is empty or closed, returns nil.
 func (b *bucket) pop() (conn *Conn) {
 	b.Lock()
-	if stack.size > 0 {
+	if stack.size > 0 && !b.closed {
 		conn, b.top = b.top.conn, b.top.next
 		b.size--
 
@@ -189,12 +197,16 @@ func (b *bucket) pop() (conn *Conn) {
 	return
 }
 
-var bucketIsFull = errors.New("bucket is full")
+var (
+	bucketIsFull   = errors.New("bucket is full")
+	bucketIsClosed = errors.New("bucket is closed")
+)
 
 // push a connection to the bucket. If the bucket is full, returns bucketIsFull.
+// If the bucket is closed, returns bucketIsClosed.
 func (b *bucket) push(conn *Conn) (err error) {
 	b.Lock()
-	if b.size < b.capacity {
+	if !b.closed && b.size < b.capacity {
 		// When a connection is pushed to the bucket, we think it's used recently.
 		// So we set the state to 1 (active). This operation can't done in the pop
 		// method, because some connections are created directly instead of poping
@@ -205,6 +217,10 @@ func (b *bucket) push(conn *Conn) (err error) {
 		b.top = &element{conn: conn, next: b.top}
 		b.size++
 		atomic.AddInt64(&b.idle, 1)
+	} else if b.closed {
+		// In fact, the bucket is full and closed can happen simultaneously, but
+		// we think the closed state has higher priority.
+		err = bucketIsClosed
 	} else {
 		err = bucketIsFull
 	}
@@ -229,6 +245,13 @@ func (b *bucket) clean(shutdown bool) {
 func (b *bucket) iterate(backup *element, shutdown bool) *element {
 	b.Lock()
 	defer b.Unlock()
+
+	// The 'closed' field of a bucket will be set to true only when the Close
+	// method of the pool is invoked. The following assignment is placed in the
+	// bucket.clean method may be better from the view of semantics, but if we
+	// do that, we need some additional works (add lock) to protect it. However,
+	// these works can be omitted in this method.
+	b.closed = shutdown
 
 	if backup == nil {
 		if b.top != nil {
