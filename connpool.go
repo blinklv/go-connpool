@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2018-07-06
+// Last Change: 2018-07-09
 
 package connpool
 
@@ -70,6 +70,33 @@ func (pool *Pool) New(address string) (net.Conn, error) {
 }
 
 func (pool *Pool) Close() error {
+}
+
+// Select a bucket for the address. If it doesn't exist, create a new one.
+func (pool *Pool) selectBucket(address string) (b *bucket) {
+	// Get a bucket from the bucket map.
+	pool.rwlock.RLock()
+	b = pool.bs[address]
+	pool.rwlock.RUnlock()
+
+	// This condition statement can save much time in most cases. Because
+	// the bucket for this address has already existed in normal case.
+	// Otherwise, we have to add write-lock every time.
+	if b == nil {
+		pool.rwlock.Lock()
+		// If the bucket for this address doesn't exist, we need to create a
+		// new one and add it to the bucket map.
+		//
+		// NOTE: We need to check whether there has already existed a bucket for
+		// this address again. The outer statement 'if b == nil' can't guarantee
+		// the bucket doesn't exist at this point.
+		if b = pool.bs[address]; b == nil {
+			b = &bucket{capacity: pool.capacity, pool: pool}
+			pool.bs[address] = b
+		}
+		pool.rwlock.Unlock()
+	}
+	return
 }
 
 func (pool *Pool) clean() {
