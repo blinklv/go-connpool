@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-type Dial func(network, address string) (net.Conn, error)
+type Dial func(address string) (net.Conn, error)
 
 // Pool is a connection pool. It will cache some connections for each address.
 // If a connection is never be used for a long time (mark it as idle), it will
@@ -30,7 +30,8 @@ type Pool struct {
 }
 
 // Create a connection pool. The 'dial' parameter defines how to create a new
-// connection; I think the net.Dial function is a good choice. The 'capacity'
+// connection. You can't directly use the raw net.Dial function, but I think
+// wrapping it on the named network (tcp, udp and unix etc) is easy. The 'capacity'
 // parameter controls the maximum idle connections to keep per-host (not all hosts).
 // The 'timeout' parameter is the maximum amount of time an idle connection will
 // remain idle before closing itself. It can't be less than 1 min in this version;
@@ -63,9 +64,28 @@ func New(dial Dial, capacity int, timeout time.Duration) (*Pool, error) {
 	return pool, nil
 }
 
+// Get a connection from the pool, the destination address of which is
+// equal to the address parameter.
 func (pool *Pool) Get(address string) (net.Conn, error) {
+	// First, get a connection bucket.
+	b := pool.selectBucket(address)
+
+	// Second, get a connection from the bucket.
+	conn := b.pop()
+	if conn == nil {
+		// If there is no idle connection in this bucket, we need to invoke the
+		// dial function to create a new connection and bind it to the bucket.
+		if c, err := pool.dial(address); err == nil {
+			conn = &Conn{c, b, 0}
+		} else {
+			return nil, err
+		}
+	}
+
+	return conn, nil
 }
 
+// Create a new connection by using the underlying dial field, and bind it to a bucket.
 func (pool *Pool) New(address string) (net.Conn, error) {
 }
 
