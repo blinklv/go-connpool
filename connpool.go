@@ -76,6 +76,7 @@ func (pool *Pool) Get(address string) (net.Conn, error) {
 		// If there is no idle connection in this bucket, we need to invoke the
 		// dial function to create a new connection and bind it to the bucket.
 		if c, err := pool.dial(address); err == nil {
+			atomic.AddInt64(&b.total, 1)
 			conn = &Conn{c, b, 0}
 		} else {
 			return nil, err
@@ -87,6 +88,13 @@ func (pool *Pool) Get(address string) (net.Conn, error) {
 
 // Create a new connection by using the underlying dial field, and bind it to a bucket.
 func (pool *Pool) New(address string) (net.Conn, error) {
+	b := pool.selectBucket(address)
+	if c, err := pool.dial(address); err == nil {
+		atomic.AddInt64(&b.total, 1)
+		return Conn{c, b, 0}, nil
+	} else {
+		return nil, err
+	}
 }
 
 func (pool *Pool) Close() error {
