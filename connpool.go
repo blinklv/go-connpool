@@ -3,8 +3,10 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2018-07-09
+// Last Change: 2018-07-10
 
+// go-connpool package implements a concurrent safe connection pool, it can be
+// used to manage and reuse connections.
 package connpool
 
 import (
@@ -16,6 +18,11 @@ import (
 	"time"
 )
 
+// This type defines how to connect to the address. You can't specify a named
+// network for this address when you implement a Dial function or use one. The
+// purpose of designing this type is to serve the Pool struct. I don't recommend
+// caching different kinds of connections in the same pool, although they all
+// satisfy the net.Conn interface.
 type Dial func(address string) (net.Conn, error)
 
 // Pool is a connection pool. It will cache some connections for each address.
@@ -92,7 +99,7 @@ func (pool *Pool) New(address string) (net.Conn, error) {
 	b := pool.selectBucket(address)
 	if c, err := pool.dial(address); err == nil {
 		atomic.AddInt64(&b.total, 1)
-		return Conn{c, b, 0}, nil
+		return &Conn{c, b, 0}, nil
 	} else {
 		return nil, err
 	}
@@ -144,18 +151,18 @@ func (pool *Pool) clean() {
 	for {
 		select {
 		case <-ticker.C:
-			pool.RLock()
+			pool.rwlock.RLock()
 			for _, b := range pool.bs {
 				// If we invoke bucket's clean method in this for loop it will cause the
 				// Get or the New method waiting for too long when creates a new bucket.
 				bs = append(bs, b)
 			}
-			pool.RUnlock()
+			pool.rwlock.RUnlock()
 
 			for _, b := range pool.bs {
 				b.clean(true)
 			}
-		case exitDone := <-exit:
+		case exitDone := <-pool.exit:
 			ticker.Stop()
 			for _, b := range pool.bs {
 				b.clean(true)
@@ -184,7 +191,7 @@ type bucket struct {
 // pop a connection from the bucket. If the bucket is empty or closed, returns nil.
 func (b *bucket) pop() (conn *Conn) {
 	b.Lock()
-	if stack.size > 0 && !b.closed {
+	if b.size > 0 && !b.closed {
 		conn, b.top = b.top.conn, b.top.next
 		b.size--
 
@@ -284,7 +291,7 @@ func (b *bucket) _iterate(backup *element, shutdown bool) *element {
 		} else {
 			b.size--
 			atomic.AddInt64(&b.idle, -1)
-			conn.Release()
+			backup.conn.Release()
 		}
 	}
 	b.top, tail.next = top, b.top
@@ -293,7 +300,7 @@ func (b *bucket) _iterate(backup *element, shutdown bool) *element {
 
 // The basic element of the bucket.
 type element struct {
-	conn *connection
+	conn *Conn
 	next *element
 }
 
