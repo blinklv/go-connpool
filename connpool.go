@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2018-07-10
+// Last Change: 2018-07-11
 
 // go-connpool package implements a concurrent safe connection pool, it can be
 // used to manage and reuse connections.
@@ -133,7 +133,7 @@ func (pool *Pool) selectBucket(address string) (b *bucket) {
 		// this address again. The outer statement 'if b == nil' can't guarantee
 		// the bucket doesn't exist at this point.
 		if b = pool.bs[address]; b == nil {
-			b = &bucket{capacity: pool.capacity, pool: pool}
+			b = &bucket{capacity: pool.capacity}
 			pool.bs[address] = b
 		}
 		pool.rwlock.Unlock()
@@ -179,7 +179,6 @@ type bucket struct {
 	size     int
 	capacity int
 	top      *element
-	pool     *Pool
 	closed   bool
 
 	// The following fields are related to statistics, and the sync.Mutex doesn't
