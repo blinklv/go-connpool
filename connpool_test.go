@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"github.com/bmizerany/assert"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -58,6 +59,11 @@ func dummyDial(address string) (net.Conn, error) {
 	return &dummyConn{address, fmt.Sprintf("127.0.0.1:%d", atomic.AddInt32(&dummyPort, 1))}, nil
 }
 
+func genConn(b *bucket, address string) *Conn {
+	c, _ := dummyDial(address)
+	return &Conn{c, b, 0}
+}
+
 func TestNew(t *testing.T) {
 	arguments := []struct {
 		dial     Dial
@@ -81,5 +87,88 @@ func TestNew(t *testing.T) {
 			assert.Equal(t, (*Pool)(nil), pool)
 			assert.NotEqual(t, nil, err)
 		}
+	}
+}
+
+func TestBucketPush(t *testing.T) {
+	samples := []struct {
+		b            *bucket
+		workers      int
+		opNumber     int
+		closedNumber int
+	}{
+		{&bucket{capacity: 128}, 1, 10000, 10001},
+		{&bucket{capacity: 256}, 1, 10000, 5001},
+		{&bucket{capacity: 512}, 2, 10000, 5001},
+		{&bucket{capacity: 1024}, 10, 100000, 50001},
+		{&bucket{capacity: 50000}, 128, 100000, 80000},
+	}
+
+	for _, sample := range samples {
+		var (
+			count   int64
+			success int64
+			full    int64
+			closed  int64
+			end     = &sync.WaitGroup{}
+			pause   = &sync.WaitGroup{}
+			cont    = make(chan struct{})
+		)
+
+		push := func() {
+			switch sample.b.push(genConn(sample.b, "192.168.1.100:80")) {
+			case bucketIsFull:
+				atomic.AddInt64(&full, 1)
+			case bucketIsClosed:
+				atomic.AddInt64(&closed, 1)
+			default:
+				atomic.AddInt64(&success, 1)
+			}
+		}
+
+		actualSize := func(b *bucket) int {
+			actual := 0
+			for b.top != nil {
+				actual++
+				b.top = b.top.next
+			}
+			return actual
+		}
+
+		for worker := 0; worker < sample.workers; worker++ {
+			pause.Add(1)
+			end.Add(1)
+			go func() {
+				i := 0
+				for {
+					i = int(atomic.AddInt64(&count, 1))
+					if i >= sample.closedNumber {
+						break
+					}
+					push()
+				}
+
+				pause.Done()
+				pause.Wait()
+				if i == sample.closedNumber {
+					sample.b.closed = true
+					close(cont)
+				}
+				<-cont
+
+				for i <= sample.opNumber {
+					push()
+					i = int(atomic.AddInt64(&count, 1))
+				}
+
+				end.Done()
+			}()
+		}
+		end.Wait()
+
+		assert.Equal(t, sample.opNumber, int(success+full+closed))
+		assert.Equal(t, sample.closedNumber, int(success+full+1))
+		assert.Equal(t, int(success), sample.b.size)
+		assert.Equal(t, sample.b.size, actualSize(sample.b))
 	}
 }
