@@ -3,10 +3,11 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2018-07-11
+// Last Change: 2018-07-24
 
-// go-connpool package implements a concurrent safe connection pool, it can be
-// used to manage and reuse connections.
+// A concurrent safe connection pool. It can be used to manage and reuse connections
+// based on the destination address of which. This design make a pool work better with
+// some load balancers.
 package connpool
 
 import (
@@ -18,11 +19,16 @@ import (
 	"time"
 )
 
-// This type defines how to connect to the address. You can't specify a named
-// network for this address when you implement a Dial function or use one. The
-// purpose of designing this type is to serve the Pool struct. I don't recommend
-// caching different kinds of connections in the same pool, although they all
-// satisfy the net.Conn interface.
+// This type defines how to connect to the address. The purpose of designing this
+// type is to serve the Pool struct. It's not as common as net.Dial that you can
+// specify a network type, which means the type of connections in one pool should
+// be same. In fact, I don't think caching different kinds of connections in the
+// same pool is a good idea, although they all satisfy the net.Conn interface. All
+// network types defined in https://golang.org/pkg/net/#Dial are not completely
+// independent, like tcp4, tcp6 and tcp, the latter includes the former two. There
+// will be some extra works to detect network types passed by callers when users
+// get connections from a pool, which sacrifices performance. Dividing various kinds
+// of connections into different pools won't be harder for users and more efficient.
 type Dial func(address string) (net.Conn, error)
 
 // Pool is a connection pool. It will cache some connections for each address.
