@@ -10,6 +10,7 @@ package connpool
 import (
 	"fmt"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -70,4 +71,43 @@ func (d *dialer) Dial(address string) (net.Conn, error) {
 	c.remote, _ = net.ResolveTCPAddr("tcp", address)
 	atomic.AddInt64(&d.count, 1)
 	return c, nil
+}
+
+type worker struct {
+	number int
+	cb     func()
+}
+
+func (w *worker) run(wg *sync.WaitGroup) {
+	for i := 0; i < w.number; i++ {
+		w.cb()
+	}
+	wg.Done()
+}
+
+type workers struct {
+	ws []*worker
+	wg *sync.WaitGroup
+}
+
+func newWorkers(wn, number int, cb func()) *workers {
+	ws := &workers{
+		ws: make([]*worker, wn),
+		wg: &sync.WaitGroup{},
+	}
+
+	for i := 0; i < wn; i++ {
+		ws.ws[i] = &worker{number, cb}
+	}
+
+	return ws
+}
+
+func (ws *workers) run() {
+	for _, w := range ws.ws {
+		w := w
+		ws.wg.Add(1)
+		go w.run(ws.wg)
+	}
+	ws.wg.Done()
 }
