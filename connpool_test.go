@@ -3,18 +3,93 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-11
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2018-07-24
+// Last Change: 2018-07-25
 
 package connpool
 
 import (
 	"fmt"
+	"github.com/bmizerany/assert"
 	"net"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestBucketPush(t *testing.T) {
+	elements := []struct {
+		b         *bucket
+		ws        *workers
+		success   int64
+		full      int64
+		closed    int64
+		threshold int
+		d         *dialer
+	}{
+		{
+			b:         &bucket{capacity: 128},
+			ws:        &workers{wn: 1, number: 256},
+			threshold: 256,
+			d:         &dialer{},
+		},
+		{
+			b:         &bucket{capacity: 256},
+			ws:        &workers{wn: 4, number: 1024},
+			threshold: 1024,
+			d:         &dialer{},
+		},
+		{
+			b:         &bucket{capacity: 256},
+			ws:        &workers{wn: 4, number: 1024},
+			threshold: 512,
+			d:         &dialer{},
+		},
+		{
+			b:         &bucket{capacity: 512},
+			ws:        &workers{wn: 16, number: 4096},
+			threshold: 1024,
+			d:         &dialer{},
+		},
+	}
+
+	for _, e := range elements {
+		e := e
+		e.ws.cb = func(i int) {
+			conn, _ := e.d.Dial("192.168.1.100:80")
+			c := &Conn{Conn: conn, b: e.b}
+
+			if i == e.threshold+1 {
+				e.b._close()
+			}
+
+			switch e.b.push(c) {
+			case nil:
+				atomic.AddInt64(&e.success, 1)
+			case bucketIsFull:
+				atomic.AddInt64(&e.full, 1)
+			case bucketIsClosed:
+				atomic.AddInt64(&e.closed, 1)
+			default:
+			}
+		}
+
+		e.ws.initialize()
+		e.ws.run()
+
+		total := e.ws.wn * e.ws.number
+		t.Logf("bucket push: total (%d) success (%d) full (%d) closed (%d)",
+			total, e.success, e.full, e.closed)
+
+		assert.Equal(t, int(total), int(e.success+e.full+e.closed))
+		assert.Equal(t, e.b.size, e.b._size())
+		if e.ws.number <= e.threshold {
+			assert.Equal(t, int(e.full), total-e.b.size)
+		} else {
+			assert.Equal(t, true, int(e.closed) > e.ws.number-e.threshold)
+		}
+	}
+}
 
 // This is an auxiliary connection type to print some operation information.
 // It satisfies net.Conn interface (But it doesn't satisfy all requirements
@@ -34,7 +109,7 @@ func (c *connection) Write(b []byte) (int, error) {
 }
 
 func (c *connection) Close() error {
-	c.d.t.Logf("close connection (%s -> %s)", c.local, c.remote)
+	atomic.AddInt64(&c.d.count, -1)
 	return nil
 }
 
@@ -59,7 +134,6 @@ func (c *connection) SetWriteDeadline(t time.Time) error {
 }
 
 type dialer struct {
-	t         *testing.T
 	localPort int32
 	count     int64
 }
@@ -75,32 +149,32 @@ func (d *dialer) Dial(address string) (net.Conn, error) {
 
 type worker struct {
 	number int
-	cb     func()
+	cb     func(int)
 }
 
 func (w *worker) run(wg *sync.WaitGroup) {
 	for i := 0; i < w.number; i++ {
-		w.cb()
+		w.cb(i)
 	}
 	wg.Done()
 }
 
 type workers struct {
+	wn     int
+	number int
+	cb     func(int)
+
 	ws []*worker
 	wg *sync.WaitGroup
 }
 
-func newWorkers(wn, number int, cb func()) *workers {
-	ws := &workers{
-		ws: make([]*worker, wn),
-		wg: &sync.WaitGroup{},
-	}
+func (ws *workers) initialize() {
+	ws.ws = make([]*worker, ws.wn)
+	ws.wg = &sync.WaitGroup{}
 
-	for i := 0; i < wn; i++ {
-		ws.ws[i] = &worker{number, cb}
+	for i := 0; i < ws.wn; i++ {
+		ws.ws[i] = &worker{ws.number, ws.cb}
 	}
-
-	return ws
 }
 
 func (ws *workers) run() {
@@ -109,5 +183,5 @@ func (ws *workers) run() {
 		ws.wg.Add(1)
 		go w.run(ws.wg)
 	}
-	ws.wg.Done()
+	ws.wg.Wait()
 }

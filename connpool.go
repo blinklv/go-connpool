@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2018-07-24
+// Last Change: 2018-07-25
 
 // A concurrent safe connection pool. It can be used to manage and reuse connections
 // based on the destination address of which. This design make a pool work better with
@@ -301,6 +301,23 @@ func (b *bucket) _iterate(backup *element, shutdown bool) *element {
 	}
 	b.top, tail.next = top, b.top
 	return backup
+}
+
+// Set the bucket to the closed state; it's only used in test now.
+func (b *bucket) _close() {
+	b.Lock()
+	b.closed = true
+	defer b.Unlock()
+}
+
+// Iterating all elements in the bucket to compute its size; it's only
+// used in test now.
+func (b *bucket) _size() int {
+	size := 0
+	for top := b.top; top != nil; top = top.next {
+		size++
+	}
+	return size
 }
 
 // The basic element of the bucket.
