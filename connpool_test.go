@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-11
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2018-07-25
+// Last Change: 2018-07-26
 
 package connpool
 
@@ -55,7 +55,7 @@ func TestBucketPush(t *testing.T) {
 
 	for _, e := range elements {
 		e := e
-		e.ws.cb = func(i int) {
+		e.ws.cb = func(i int) error {
 			conn, _ := e.d.Dial("192.168.1.100:80")
 			c := &Conn{Conn: conn, b: e.b}
 
@@ -72,6 +72,8 @@ func TestBucketPush(t *testing.T) {
 				atomic.AddInt64(&e.closed, 1)
 			default:
 			}
+
+			return nil
 		}
 
 		e.ws.initialize()
@@ -87,6 +89,74 @@ func TestBucketPush(t *testing.T) {
 			assert.Equal(t, int(e.full), total-e.b.size)
 		} else {
 			assert.Equal(t, true, int(e.closed) > e.ws.number-e.threshold)
+		}
+	}
+}
+
+func TestBucketPop(t *testing.T) {
+	elements := []struct {
+		b         *bucket
+		ws        *workers
+		success   int64
+		fail      int64
+		threshold int
+		d         *dialer
+	}{
+		{
+			b:         &bucket{capacity: 128},
+			ws:        &workers{wn: 1, number: 256},
+			threshold: 256,
+			d:         &dialer{},
+		},
+		{
+			b:         &bucket{capacity: 256},
+			ws:        &workers{wn: 4, number: 1024},
+			threshold: 1024,
+			d:         &dialer{},
+		},
+		{
+			b:         &bucket{capacity: 512},
+			ws:        &workers{wn: 4, number: 1024},
+			threshold: 256,
+			d:         &dialer{},
+		},
+		{
+			b:         &bucket{capacity: 1024},
+			ws:        &workers{wn: 16, number: 4096},
+			threshold: 512,
+			d:         &dialer{},
+		},
+	}
+
+	for _, e := range elements {
+		e := e
+		fillBucket(e.b)
+		e.ws.cb = func(i int) error {
+			if i == e.threshold+1 {
+				e.b._close()
+			}
+
+			if e.b.pop() != nil {
+				atomic.AddInt64(&e.success, 1)
+			} else {
+				atomic.AddInt64(&e.fail, 1)
+			}
+			return nil
+		}
+
+		e.ws.initialize()
+		e.ws.run()
+
+		total := e.ws.wn * e.ws.number
+		t.Logf("bucket pop: total (%d) success (%d) fail (%d)",
+			total, e.success, e.fail)
+
+		assert.Equal(t, int(total), int(e.success+e.fail))
+		assert.Equal(t, e.b.size, e.b._size())
+		if e.ws.number <= e.threshold {
+			assert.Equal(t, e.b.capacity, int(e.success))
+		} else {
+			assert.Equal(t, true, int(e.fail) > e.ws.number-e.threshold)
 		}
 	}
 }
@@ -149,20 +219,23 @@ func (d *dialer) Dial(address string) (net.Conn, error) {
 
 type worker struct {
 	number int
-	cb     func(int)
+	cb     func(int) error
 }
 
-func (w *worker) run(wg *sync.WaitGroup) {
+func (w *worker) run(wg *sync.WaitGroup) error {
+	defer wg.Done()
 	for i := 0; i < w.number; i++ {
-		w.cb(i)
+		if err := w.cb(i); err != nil {
+			return err
+		}
 	}
-	wg.Done()
+	return nil
 }
 
 type workers struct {
 	wn     int
 	number int
-	cb     func(int)
+	cb     func(int) error
 
 	ws []*worker
 	wg *sync.WaitGroup
@@ -184,4 +257,17 @@ func (ws *workers) run() {
 		go w.run(ws.wg)
 	}
 	ws.wg.Wait()
+}
+
+func fillBucket(b *bucket) {
+	d := &dialer{}
+	for {
+		conn, _ := d.Dial("192.168.1.100:80")
+		c := &Conn{Conn: conn, b: b}
+
+		if b.push(c) != nil {
+			break
+		}
+	}
+	return
 }
