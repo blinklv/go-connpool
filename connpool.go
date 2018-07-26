@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2018-07-25
+// Last Change: 2018-07-26
 
 // A concurrent safe connection pool. It can be used to manage and reuse connections
 // based on the destination address of which. This design make a pool work better with
@@ -191,6 +191,10 @@ type bucket struct {
 	// protect them. So any operation on them should be atomic.
 	total int64 // The total number of connections related to this bucket.
 	idle  int64 // The number of idle connections in the bucket.
+
+	// The 'interrupt' field is only used in test mode; it will be nil
+	// in normal cases.
+	interrupt chan chan struct{}
 }
 
 // pop a connection from the bucket. If the bucket is empty or closed, returns nil.
@@ -248,8 +252,22 @@ func (b *bucket) push(conn *Conn) (err error) {
 func (b *bucket) clean(shutdown bool) {
 	for backup := (*element)(nil); ; {
 		if backup = b.iterate(backup, shutdown); backup == nil {
-			return
+			break
 		}
+
+		// NOTE: The interrupt field isn't empty only in test mode.
+		if b.interrupt != nil {
+			done := make(chan struct{})
+			b.interrupt <- done
+			<-done
+		}
+	}
+
+	if b.interrupt != nil {
+		// NOTE: The following statements only run in test mode. So no matter
+		// how complicated it is, it won't affect performance in normal cases.
+		close(b.interrupt)
+		b.interrupt = nil
 	}
 }
 
@@ -266,7 +284,7 @@ func (b *bucket) iterate(backup *element, shutdown bool) *element {
 	b.closed = shutdown
 
 	if backup == nil {
-		if b.top != nil {
+		if b.top == nil {
 			return nil
 		}
 		backup = b.top
