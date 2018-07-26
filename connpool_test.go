@@ -130,7 +130,7 @@ func TestBucketPop(t *testing.T) {
 
 	for _, e := range elements {
 		e := e
-		fillBucket(e.b)
+		fillBucket(&dialer{}, e.b)
 		e.ws.cb = func(i int) error {
 			if i == e.threshold+1 {
 				e.b._close()
@@ -158,6 +158,41 @@ func TestBucketPop(t *testing.T) {
 		} else {
 			assert.Equal(t, true, int(e.fail) > e.ws.number-e.threshold)
 		}
+	}
+}
+
+func TestBucketClean(t *testing.T) {
+	type element struct {
+		b               *bucket
+		cb              func(e *element) error
+		d               *dialer
+		interruptNumber int
+	}
+	elements := []*element{
+		&element{
+			b: &bucket{
+				capacity:  256,
+				interrupt: make(chan chan struct{}),
+			},
+			d: &dialer{},
+			cb: func(e *element) error {
+				e.interruptNumber++
+				return nil
+			},
+		},
+	}
+
+	for _, e := range elements {
+		e := e
+		fillBucket(e.d, e.b)
+		go e.b.clean(false)
+		for done := range e.b.interrupt {
+			e.cb(e)
+			close(done)
+		}
+		e.b.clean(true)
+		t.Logf("interrupt number (%d) rest connections (%d) ",
+			e.interruptNumber, e.d.count)
 	}
 }
 
@@ -259,13 +294,13 @@ func (ws *workers) run() {
 	ws.wg.Wait()
 }
 
-func fillBucket(b *bucket) {
-	d := &dialer{}
+func fillBucket(d *dialer, b *bucket) {
 	for {
 		conn, _ := d.Dial("192.168.1.100:80")
 		c := &Conn{Conn: conn, b: b}
 
 		if b.push(c) != nil {
+			c.Close()
 			break
 		}
 	}
