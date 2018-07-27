@@ -312,7 +312,7 @@ func (b *bucket) _iterate(backup *element, shutdown bool) *element {
 	// loop costs so much time when the list is too long.
 	for tail, i = backup, 0; backup != nil && i < 16; i++ {
 		current, backup = backup, backup.next
-		if !shutdown && current.conn.state == 1 {
+		if !shutdown && b.size < b.capacity && current.conn.state == 1 {
 			current.conn.state = 0
 			// NOTE: Because we push the active connection to the temporary bucket.
 			// which will reverse the elements order in the original bucket..
@@ -323,7 +323,10 @@ func (b *bucket) _iterate(backup *element, shutdown bool) *element {
 			current.conn.Release()
 		}
 	}
-	b.top, tail.next = top, b.top
+
+	if top != nil {
+		b.top, tail.next = top, b.top
+	}
 	return backup
 }
 
