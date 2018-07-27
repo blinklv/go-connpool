@@ -90,8 +90,7 @@ func (pool *Pool) Get(address string) (net.Conn, error) {
 		// If there is no idle connection in this bucket, we need to invoke the
 		// dial function to create a new connection and bind it to the bucket.
 		if c, err := pool.dial(address); err == nil {
-			atomic.AddInt64(&b.total, 1)
-			conn = &Conn{c, b, 0}
+			conn = b.bind(c)
 		} else {
 			return nil, err
 		}
@@ -104,8 +103,7 @@ func (pool *Pool) Get(address string) (net.Conn, error) {
 func (pool *Pool) New(address string) (net.Conn, error) {
 	b := pool.selectBucket(address)
 	if c, err := pool.dial(address); err == nil {
-		atomic.AddInt64(&b.total, 1)
-		return &Conn{c, b, 0}, nil
+		return b.bind(c), nil
 	} else {
 		return nil, err
 	}
@@ -244,6 +242,12 @@ func (b *bucket) push(conn *Conn) (err error) {
 	return
 }
 
+// When a connection is created, we should bind it to the specific bucket.
+func (b *bucket) bind(c net.Conn) *Conn {
+	atomic.AddInt64(&b.total, 1)
+	return &Conn{c, b, 0}
+}
+
 // Clean all idle connections in the stack. This operation is more expensive than
 // the pop and the push method. The main problem is this operation will make other
 // methods (push, pop) temporary unavailability when the list is too long. The current
@@ -287,7 +291,8 @@ func (b *bucket) iterate(backup *element, shutdown bool) *element {
 		if b.top == nil {
 			return nil
 		}
-		backup, b.top = b.top, nil
+		backup, b.top, b.size = b.top, nil, 0
+		atomic.StoreInt64(&b.idle, 0)
 	}
 
 	return b._iterate(backup, shutdown)
@@ -312,11 +317,9 @@ func (b *bucket) _iterate(backup *element, shutdown bool) *element {
 			// NOTE: Because we push the active connection to the temporary bucket.
 			// which will reverse the elements order in the original bucket..
 			top, current.next = current, top
-
-			// top = &element{conn: backup.conn, next: top}
+			b.size++
+			atomic.AddInt64(&b.idle, 1)
 		} else {
-			b.size--
-			atomic.AddInt64(&b.idle, -1)
 			current.conn.Release()
 		}
 	}
