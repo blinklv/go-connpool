@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-11
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2018-07-26
+// Last Change: 2018-07-27
 
 package connpool
 
@@ -130,7 +130,7 @@ func TestBucketPop(t *testing.T) {
 
 	for _, e := range elements {
 		e := e
-		fillBucket(&dialer{}, e.b)
+		bucketFill(e.b, &dialer{})
 		e.ws.cb = func(i int) error {
 			if i == e.threshold+1 {
 				e.b._close()
@@ -163,13 +163,17 @@ func TestBucketPop(t *testing.T) {
 
 func TestBucketClean(t *testing.T) {
 	type element struct {
+		t               *testing.T
 		b               *bucket
 		cb              func(e *element) error
 		d               *dialer
 		interruptNumber int
+		pushNumber      int
+		popNumber       int
 	}
 	elements := []*element{
 		&element{
+			t: t,
 			b: &bucket{
 				capacity:  256,
 				interrupt: make(chan chan struct{}),
@@ -180,19 +184,39 @@ func TestBucketClean(t *testing.T) {
 				return nil
 			},
 		},
+		&element{
+			t: t,
+			b: &bucket{
+				capacity:  512,
+				interrupt: make(chan chan struct{}),
+			},
+			d: &dialer{},
+			cb: func(e *element) error {
+				e.interruptNumber++
+				e.pushNumber += bucketPush(e.b, e.d, 4)
+				return nil
+			},
+		},
 	}
 
 	for _, e := range elements {
 		e := e
-		fillBucket(e.d, e.b)
+		bucketFill(e.b, e.d)
 		go e.b.clean(false)
 		for done := range e.b.interrupt {
 			e.cb(e)
+			e.t.Logf("size (%d) actual size (%d) push (%d) idle (%d) total (%d) dialer-count (%d)",
+				e.b.size, e.b._size(), e.pushNumber, atomic.LoadInt64(&e.b.idle), atomic.LoadInt64(&e.b.total), e.d.count)
 			close(done)
 		}
+
 		e.b.clean(true)
-		t.Logf("interrupt number (%d) rest connections (%d) ",
-			e.interruptNumber, e.d.count)
+		t.Logf("interrupt number (%d) rest connections (%d) size (%d) actual size (%d) idle (%d) total (%d) dialer-count(%d)",
+			e.interruptNumber, e.d.count,
+			e.b.size, e.b._size(), atomic.LoadInt64(&e.b.idle), atomic.LoadInt64(&e.b.total),
+			e.d.count,
+		)
+		assert.Equal(t, 0, int(e.d.count))
 	}
 }
 
@@ -294,15 +318,20 @@ func (ws *workers) run() {
 	ws.wg.Wait()
 }
 
-func fillBucket(d *dialer, b *bucket) {
-	for {
+// 'number' is the expected number of pushing operations, and return value
+// is the actual number of pushing operations.
+func bucketPush(b *bucket, d *dialer, number int) (i int) {
+	for i = 0; i < number; i++ {
 		conn, _ := d.Dial("192.168.1.100:80")
-		c := &Conn{Conn: conn, b: b}
-
+		c := b.bind(conn)
 		if b.push(c) != nil {
 			c.Close()
 			break
 		}
 	}
 	return
+}
+
+func bucketFill(b *bucket, d *dialer) {
+	bucketPush(b, d, b.capacity-b.size)
 }
