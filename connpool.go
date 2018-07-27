@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2018-07-26
+// Last Change: 2018-07-27
 
 // A concurrent safe connection pool. It can be used to manage and reuse connections
 // based on the destination address of which. This design make a pool work better with
@@ -287,7 +287,7 @@ func (b *bucket) iterate(backup *element, shutdown bool) *element {
 		if b.top == nil {
 			return nil
 		}
-		backup = b.top
+		backup, b.top = b.top, nil
 	}
 
 	return b._iterate(backup, shutdown)
@@ -299,22 +299,25 @@ func (b *bucket) iterate(backup *element, shutdown bool) *element {
 func (b *bucket) _iterate(backup *element, shutdown bool) *element {
 	// Invariant: the backup parameter isn't nil.
 	var (
-		top, tail *element
-		i         int
+		top, tail, current *element
+		i                  int
 	)
 
 	// We only handle the first 16 connection at once; this will prevent this
 	// loop costs so much time when the list is too long.
-	for tail, i = backup, 0; backup != nil && i < 16; backup, i = backup.next, i+1 {
-		if !shutdown && backup.conn.state == 1 {
-			backup.conn.state = 0
+	for tail, i = backup, 0; backup != nil && i < 16; i++ {
+		current, backup = backup, backup.next
+		if !shutdown && current.conn.state == 1 {
+			current.conn.state = 0
 			// NOTE: Because we push the active connection to the temporary bucket.
 			// which will reverse the elements order in the original bucket..
-			top = &element{conn: backup.conn, next: top}
+			top, current.next = current, top
+
+			// top = &element{conn: backup.conn, next: top}
 		} else {
 			b.size--
 			atomic.AddInt64(&b.idle, -1)
-			backup.conn.Release()
+			current.conn.Release()
 		}
 	}
 	b.top, tail.next = top, b.top
