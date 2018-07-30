@@ -18,6 +18,85 @@ import (
 	"time"
 )
 
+func TestNewPool(t *testing.T) {
+	elements := []struct {
+		dial     Dial
+		capacity int
+		timeout  time.Duration
+		ok       bool
+	}{
+		// Correct
+		{
+			dial: func(address string) (net.Conn, error) {
+				return net.Dial("tcp", address)
+			},
+			capacity: 128,
+			timeout:  5 * time.Minute,
+			ok:       true,
+		},
+		{
+			dial: func(address string) (net.Conn, error) {
+				return (&dialer{}).Dial(address)
+			},
+			capacity: 128,
+			timeout:  5 * time.Minute,
+			ok:       true,
+		},
+		{
+			dial: func(address string) (net.Conn, error) {
+				return (&dialer{}).Dial(address)
+			},
+			capacity: 0,
+			timeout:  5 * time.Minute,
+			ok:       true,
+		},
+		{
+			dial: func(address string) (net.Conn, error) {
+				return (&dialer{}).Dial(address)
+			},
+			capacity: 128,
+			timeout:  1 * time.Minute,
+			ok:       true,
+		},
+
+		// Incorrect
+		{
+			dial:     nil,
+			capacity: 128,
+			timeout:  3 * time.Minute,
+			ok:       false,
+		},
+		{
+			dial: func(address string) (net.Conn, error) {
+				return (&dialer{}).Dial(address)
+			},
+			capacity: -1,
+			timeout:  3 * time.Minute,
+			ok:       false,
+		},
+		{
+			dial: func(address string) (net.Conn, error) {
+				return (&dialer{}).Dial(address)
+			},
+			capacity: 128,
+			timeout:  time.Second,
+			ok:       false,
+		},
+	}
+
+	for _, e := range elements {
+		pool, err := New(e.dial, e.capacity, e.timeout)
+		if e.ok {
+			assert.NotEqual(t, (*Pool)(nil), pool)
+			assert.Equal(t, nil, err)
+		} else {
+			t.Logf("new pool failed: %s", err)
+			assert.Equal(t, (*Pool)(nil), pool)
+			assert.NotEqual(t, nil, err)
+		}
+	}
+}
+
 func TestBucketPush(t *testing.T) {
 	elements := []struct {
 		b         *bucket
