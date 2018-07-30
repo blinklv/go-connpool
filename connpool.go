@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2018-07-27
+// Last Change: 2018-07-30
 
 // A concurrent safe connection pool. It can be used to manage and reuse connections
 // based on the destination address of which. This design make a pool work better with
@@ -248,14 +248,18 @@ func (b *bucket) bind(c net.Conn) *Conn {
 	return &Conn{c, b, 0}
 }
 
-// Clean all idle connections in the stack. This operation is more expensive than
-// the pop and the push method. The main problem is this operation will make other
-// methods (push, pop) temporary unavailability when the list is too long. The current
-// strategy is dividing this task into a number of small parts; other methods have
-// a chance to get the lock between two subtasks.
-func (b *bucket) clean(shutdown bool) {
-	for backup := (*element)(nil); ; {
-		if backup = b.iterate(backup, shutdown); backup == nil {
+// Clean all idle connections in the bucket and return the number of connections cleaned
+// up in this process. This operation is more expensive than the pop and the push method
+// . The main problem is this operation will make other methods (push, pop) temporary
+// unavailability when the list is too long. The current strategy is dividing this task
+// into a number of small parts; other methods have a chance to get the lock between two
+// subtasks.
+func (b *bucket) clean(shutdown bool) (unused int) {
+
+	for backup, inc := (*element)(nil), 0; ; {
+		backup, inc = b.iterate(backup, shutdown)
+		unused += inc
+		if backup == nil {
 			break
 		}
 
@@ -273,10 +277,11 @@ func (b *bucket) clean(shutdown bool) {
 		close(b.interrupt)
 		b.interrupt = nil
 	}
+	return
 }
 
 // Wrap the _iterate method; lock it and initialize the backup parameter.
-func (b *bucket) iterate(backup *element, shutdown bool) *element {
+func (b *bucket) iterate(backup *element, shutdown bool) (*element, int) {
 	b.Lock()
 	defer b.Unlock()
 
@@ -289,7 +294,7 @@ func (b *bucket) iterate(backup *element, shutdown bool) *element {
 
 	if backup == nil {
 		if b.top == nil {
-			return nil
+			return nil, 0
 		}
 		backup, b.top, b.size = b.top, nil, 0
 		atomic.StoreInt64(&b.idle, 0)
@@ -301,11 +306,13 @@ func (b *bucket) iterate(backup *element, shutdown bool) *element {
 // Iterate each connection in the bucket. If the connection's state is active,
 // reset it to idle and push it to the temporary bucket. Otherwise, skip it (of
 // course also release it) and descrease the original bucket's size.
-func (b *bucket) _iterate(backup *element, shutdown bool) *element {
+func (b *bucket) _iterate(backup *element, shutdown bool) (*element, int) {
 	// Invariant: the backup parameter isn't nil.
 	var (
 		top, tail, current *element
-		i                  int
+		// 'unused' variable records the number of connections cleand up
+		// in this iteration.
+		i, unused int
 	)
 
 	// We only handle the first 16 connection at once; this will prevent this
@@ -321,13 +328,14 @@ func (b *bucket) _iterate(backup *element, shutdown bool) *element {
 			atomic.AddInt64(&b.idle, 1)
 		} else {
 			current.conn.Release()
+			unused++
 		}
 	}
 
 	if top != nil {
 		b.top, tail.next = top, b.top
 	}
-	return backup
+	return backup, unused
 }
 
 // Set the bucket to the closed state; it's only used in test now.
