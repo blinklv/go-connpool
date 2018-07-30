@@ -72,7 +72,8 @@ func New(dial Dial, capacity int, timeout time.Duration) (*Pool, error) {
 		bs:       make(map[string]*bucket),
 		exit:     make(chan chan struct{}),
 	}
-
+	// The clean method runs in a new goroutine. In fact, the primary objective of
+	// designing the Close method is stopping it to prevent resource leak.
 	go pool.clean()
 
 	return pool, nil
@@ -250,7 +251,7 @@ func (b *bucket) bind(c net.Conn) *Conn {
 
 // Clean all idle connections in the bucket and return the number of connections cleaned
 // up in this process. This operation is more expensive than the pop and the push method
-// . The main problem is this operation will make other methods (push, pop) temporary
+// . The primary problem is this operation will make other methods (push, pop) temporary
 // unavailability when the list is too long. The current strategy is dividing this task
 // into a number of small parts; other methods have a chance to get the lock between two
 // subtasks.
