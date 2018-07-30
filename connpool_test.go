@@ -3,13 +3,14 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-11
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2018-07-27
+// Last Change: 2018-07-30
 
 package connpool
 
 import (
 	"fmt"
 	"github.com/bmizerany/assert"
+	"math/rand"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -163,10 +164,11 @@ func TestBucketPop(t *testing.T) {
 
 func TestBucketClean(t *testing.T) {
 	type element struct {
-		t               *testing.T
-		b               *bucket
-		cb              func(e *element) error
-		d               *dialer
+		t  *testing.T
+		b  *bucket
+		cb func(e *element) error
+		d  *dialer
+		*boolgen
 		interruptNumber int
 		pushNumber      int
 		popNumber       int
@@ -197,26 +199,109 @@ func TestBucketClean(t *testing.T) {
 				return nil
 			},
 		},
+		&element{
+			t: t,
+			b: &bucket{
+				capacity:  1024,
+				interrupt: make(chan chan struct{}),
+			},
+			d: &dialer{},
+			cb: func(e *element) error {
+				e.interruptNumber++
+				e.popNumber += bucketPop(e.b, 4)
+				return nil
+			},
+		},
+		&element{
+			t: t,
+			b: &bucket{
+				capacity:  1024,
+				interrupt: make(chan chan struct{}),
+			},
+			d:       &dialer{},
+			boolgen: newBoolgen(),
+			cb: func(e *element) error {
+				e.interruptNumber++
+				if e.boolgen.Bool() {
+					e.pushNumber += bucketPush(e.b, e.d, 6)
+				} else {
+					e.popNumber += bucketPop(e.b, 7)
+				}
+				return nil
+			},
+		},
+		&element{
+			t: t,
+			b: &bucket{
+				capacity:  512,
+				interrupt: make(chan chan struct{}),
+			},
+			d:       &dialer{},
+			boolgen: newBoolgen(),
+			cb: func(e *element) error {
+				e.interruptNumber++
+				if e.boolgen.Bool() {
+					e.pushNumber += bucketPush(e.b, e.d, 16)
+				} else {
+					e.popNumber += bucketPop(e.b, 4)
+				}
+				return nil
+			},
+		},
+		// Trivial case (zero capacity).
+		&element{
+			t: t,
+			b: &bucket{
+				capacity:  0,
+				interrupt: make(chan chan struct{}),
+			},
+			d:       &dialer{},
+			boolgen: newBoolgen(),
+			cb: func(e *element) error {
+				e.interruptNumber++
+				if e.boolgen.Bool() {
+					e.pushNumber += bucketPush(e.b, e.d, 16)
+				} else {
+					e.popNumber += bucketPop(e.b, 4)
+				}
+				return nil
+			},
+		},
 	}
 
 	for _, e := range elements {
-		e := e
+		var (
+			e         = e
+			unused    = 0
+			cleanDone = make(chan struct{})
+		)
+
 		bucketFill(e.b, e.d)
-		go e.b.clean(false)
+		go func() {
+			unused = e.b.clean(false)
+			close(cleanDone)
+		}()
+
 		for done := range e.b.interrupt {
 			e.cb(e)
-			e.t.Logf("size (%d) actual size (%d) push (%d) idle (%d) total (%d) dialer-count (%d)",
-				e.b.size, e.b._size(), e.pushNumber, atomic.LoadInt64(&e.b.idle), atomic.LoadInt64(&e.b.total), e.d.count)
 			close(done)
 		}
+		<-cleanDone
 
-		e.b.clean(true)
-		t.Logf("interrupt number (%d) rest connections (%d) size (%d) actual size (%d) idle (%d) total (%d) dialer-count(%d)",
-			e.interruptNumber, e.d.count,
-			e.b.size, e.b._size(), atomic.LoadInt64(&e.b.idle), atomic.LoadInt64(&e.b.total),
-			e.d.count,
-		)
+		e.t.Logf("size/actual-size/idle (%d/%d/%d)  push/pop/unused (%d/%d/%d) total/dialer-count(%d/%d)",
+			e.b.size, e.b._size(), e.b.idle,
+			e.pushNumber, e.popNumber, unused,
+			e.b.total, e.d.count)
+
+		assert.Equal(t, e.b.size, e.b._size())
+		assert.Equal(t, e.b.size, int(e.b.idle))
+		assert.Equal(t, e.b.total, e.d.count)
+		assert.Equal(t, int(e.b.total)-e.b.capacity, e.pushNumber-(e.popNumber+unused))
+
+		size := e.b.size
+		unused = e.b.clean(true)
 		assert.Equal(t, 0, int(e.d.count))
+		assert.Equal(t, size, unused)
 	}
 }
 
@@ -332,6 +417,43 @@ func bucketPush(b *bucket, d *dialer, number int) (i int) {
 	return
 }
 
+// 'number' is the expected number of popping operations, and return value
+// is the actual number of popping operations.
+func bucketPop(b *bucket, number int) (i int) {
+	for i = 0; i < number; i++ {
+		if conn := b.pop(); conn != nil {
+			conn.Release()
+		} else {
+			break
+		}
+	}
+	return
+}
+
 func bucketFill(b *bucket, d *dialer) {
 	bucketPush(b, d, b.capacity-b.size)
+}
+
+// The original design of the following struct is from StackOverflow:
+// https://stackoverflow.com/questions/45030618/generate-a-random-bool-in-go?answertab=active#tab-top
+type boolgen struct {
+	src       rand.Source
+	cache     int64
+	remaining int
+}
+
+func newBoolgen() *boolgen {
+	return &boolgen{src: rand.NewSource(time.Now().UnixNano())}
+}
+
+func (b *boolgen) Bool() bool {
+	if b.remaining == 0 {
+		b.cache, b.remaining = b.src.Int63(), 63
+	}
+
+	result := b.cache&0x01 == 1
+	b.cache >>= 1
+	b.remaining--
+
+	return result
 }
