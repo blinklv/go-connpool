@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2018-07-30
+// Last Change: 2018-07-31
 
 // A concurrent safe connection pool. It can be used to manage and reuse connections
 // based on the destination address of which. This design make a pool work better with
@@ -18,6 +18,27 @@ import (
 	"sync/atomic"
 	"time"
 )
+
+// Pool's statistical data. You can get it from Pool.Stats method.
+type Stats struct {
+	// Timestamp identifies when this statistical was generated. It equals
+	// to the number of seconds elapsed since January 1, 1970 UTC.
+	Timestamp int64 `json:"timestamp"`
+
+	// Destinations collects all destination statistical data related to
+	// the pool. Each destination is indexed by an address.
+	Destinations map[string]DestinationStats `json:"destinations"`
+}
+
+// Destination's statistical data.
+type DestinationStats struct {
+	// The total number of connections related to this destination, which
+	// contains the number of active connections and idle connections.
+	Total int `json:"total"`
+
+	// The number of idle connections related to this destination.
+	Idle int `json:"idle"`
+}
 
 // This type defines how to connect to the address. The purpose of designing this
 // type is to serve the Pool struct. It's not as common as net.Dial that you can
