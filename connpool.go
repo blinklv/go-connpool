@@ -155,6 +155,8 @@ func (pool *Pool) Stats() *Stats {
 
 	stats.Destinations = make([]DestinationStats, 0, len(pool.bs))
 	for address, b := range pool.bs {
+		// We needn't add the lock to protect 'total' and 'idle' field of a
+		// bucket; any operation on them is atomic.
 		stats.Destinations = append(stats.Destinations, DestinationStats{
 			Address: address,
 			Total:   atomic.LoadInt64(&b.total),
