@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-11
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2018-07-30
+// Last Change: 2018-07-31
 
 package connpool
 
@@ -166,6 +166,138 @@ func TestPoolNew(t *testing.T) {
 		e.ws.cb = func(i int) error {
 			addr := selectAddress(e.addresses)
 			c, _ := pool.New(addr.value)
+			c.Close()
+			atomic.AddInt64(&addr.count, 1)
+			return nil
+		}
+
+		e.ws.initialize()
+		e.ws.run()
+
+		var count, size, actual, idle, total int
+		for _, addr := range e.addresses {
+			b := pool.selectBucket(addr.value)
+			t.Logf("%s (%d) size/actual-size/idle (%d/%d/%d) total (%d)",
+				addr.value, addr.count, b.size, b._size(), b.idle, b.total)
+			count += int(addr.count)
+			size += b.size
+			actual += b._size()
+			idle += int(b.idle)
+			total += int(b.total)
+		}
+
+		t.Logf("%s (%d) size/actual-size/idle (%d/%d/%d) total/dialer-count (%d/%d)",
+			"summary", count, size, actual, idle, total, e.d.count)
+		assert.Equal(t, e.ws.wn*e.ws.number, count)
+		assert.Equal(t, size, actual)
+		assert.Equal(t, size, idle)
+		assert.Equal(t, int(e.d.count), total)
+
+		pool.Close()
+
+		for _, addr := range e.addresses {
+			b := pool.selectBucket(addr.value)
+			assert.Equal(t, 0, b.size)
+			assert.Equal(t, 0, b._size())
+			assert.Equal(t, 0, int(b.idle))
+			assert.Equal(t, 0, int(b.total))
+		}
+		assert.Equal(t, 0, int(e.d.count))
+	}
+}
+
+func TestPoolGet(t *testing.T) {
+	type address struct {
+		value string
+		count int64
+	}
+
+	selectAddress := func(addresses []*address) *address {
+		return addresses[int(rand.Int63())%len(addresses)]
+	}
+
+	elements := []struct {
+		capacity  int
+		timeout   time.Duration
+		delay     time.Duration
+		d         *dialer
+		ws        *workers
+		addresses []*address
+	}{
+		{
+			capacity: 128,
+			timeout:  3 * time.Minute,
+			d:        &dialer{},
+			ws:       &workers{wn: 1, number: 512},
+			addresses: []*address{
+				{value: "192.168.1.1:80"},
+				{value: "192.168.1.2:80"},
+				{value: "192.168.1.3:80"},
+				{value: "192.168.1.4:80"},
+			},
+		},
+		{
+			capacity: 128,
+			timeout:  3 * time.Minute,
+			d:        &dialer{},
+			ws:       &workers{wn: 128, number: 512},
+			addresses: []*address{
+				{value: "192.168.1.1:80"},
+				{value: "192.168.1.2:80"},
+				{value: "192.168.1.3:80"},
+				{value: "192.168.1.4:80"},
+			},
+		},
+		{
+			capacity: 128,
+			timeout:  3 * time.Minute,
+			d:        &dialer{},
+			ws:       &workers{wn: 256, number: 512},
+			addresses: []*address{
+				{value: "192.168.1.1:80"},
+				{value: "192.168.1.2:80"},
+			},
+		},
+		{
+			capacity: 128,
+			timeout:  3 * time.Minute,
+			d:        &dialer{},
+			ws:       &workers{wn: 512, number: 1024},
+			addresses: []*address{
+				{value: "192.168.1.1:80"},
+				{value: "192.168.1.2:80"},
+			},
+		},
+		{
+			capacity: 128,
+			timeout:  3 * time.Minute,
+			delay:    10 * time.Millisecond,
+			d:        &dialer{},
+			ws:       &workers{wn: 512, number: 1024},
+			addresses: []*address{
+				{value: "192.168.1.1:80"},
+				{value: "192.168.1.2:80"},
+				{value: "192.168.1.3:80"},
+				{value: "192.168.1.4:80"},
+				{value: "192.168.1.5:80"},
+				{value: "192.168.1.6:80"},
+				{value: "192.168.1.7:80"},
+				{value: "192.168.1.8:80"},
+				{value: "192.168.1.9:80"},
+				{value: "192.168.1.10:80"},
+			},
+		},
+	}
+
+	for _, e := range elements {
+		e := e
+		pool, _ := New(e.d.Dial, e.capacity, e.timeout)
+		e.ws.cb = func(i int) error {
+			addr := selectAddress(e.addresses)
+			c, _ := pool.Get(addr.value)
+			if e.delay != 0 {
+				time.Sleep(e.delay)
+			}
 			c.Close()
 			atomic.AddInt64(&addr.count, 1)
 			return nil
