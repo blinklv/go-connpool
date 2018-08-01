@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2018-07-31
+// Last Change: 2018-08-01
 
 // A concurrent safe connection pool. It can be used to manage and reuse connections
 // based on the destination address of which. This design make a pool work better with
@@ -45,13 +45,18 @@ type Pool struct {
 
 // Create a connection pool. The 'dial' parameter defines how to create a new
 // connection. You can't directly use the raw net.Dial function, but I think
-// wrapping it on the named network (tcp, udp and unix etc) is easy. The 'capacity'
-// parameter controls the maximum idle connections to keep per-host (not all hosts).
-// The 'timeout' parameter is the maximum amount of time an idle connection will
-// remain idle before closing itself. It can't be less than 1 min in this version;
-// Otherwise, many CPU cycles are occupied by the 'clean' task. I usually set it
-// to 3 ~ 5 min, but if there exist too many resident connections in your program,
-// this value should be larger.
+// wrapping it on the named network (tcp, udp and unix etc) is easy, as follows:
+//
+//  func(address string) (net.Conn, error) {
+//      return net.Dial("tcp", address)
+//  }
+//
+// The 'capacity' parameter controls the maximum idle connections to keep per-host
+// (not all hosts). The 'timeout' parameter is the maximum amount of time an idle
+// connection will remain idle before closing itself. It can't be less than 1 min
+// in this version; Otherwise, many CPU cycles are occupied by the 'clean' task.
+// I usually set it to 3 ~ 5 min, but if there exist too many resident connections
+// in your program, this value should be larger.
 func New(dial Dial, capacity int, timeout time.Duration) (*Pool, error) {
 	if dial == nil {
 		return nil, fmt.Errorf("dial can't be nil")
