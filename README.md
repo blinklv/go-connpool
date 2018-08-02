@@ -31,11 +31,11 @@ dial := func(address string) (net.Conn, error) {
 }
 
 pool, err := connpool.New(dial, 128, 5*time.Minute)
-    if err != nil {
-        log.Fatalf("create connection pool failed %s", err)
-    }
+if err != nil {
+    log.Fatalf("create connection pool failed %s", err)
+}
 
-// Your codes.
+run(pool)
 
 pool.Close()
 ```
@@ -65,6 +65,7 @@ if err != nil {
 }
 
 if err := handle(conn); err != nil && isClosed(err) {
+    conn.(*connpool.Conn).Release()
     if conn, err = pool.New(address); err != nil {
         return err
     }
@@ -76,8 +77,20 @@ if err := handle(conn); err != nil && isClosed(err) {
 return conn.Close()
 ```
 
-`Pool.New` creates a new connection by using the underlying dial field instead of acquiring a existing connection in the pool. This way can guarantee getting a valid connection in first retrying unless the background can't serve normally. No matter which way we use to get a connection from the pool, we must close it at the end. `Conn.Close` method tries to put the connection into the pool if there is enough room in which. This step is very critical, so you shouldn't ignore it; Otherwise, no connection will be reused. In fact, even though you don't use any connection pool, closing connections is necessary to prevent resource leak.
+`Pool.New` creates a new connection by using the underlying dial field instead of acquiring a existing connection in the pool. This way can guarantee getting a valid connection in first retrying unless the background can't serve normally. No matter which way we use to get a connection from the pool, we must close it at the end. `Conn.Close` method tries to put the connection into the pool if there is enough room in which. This step is very critical, so you shouldn't ignore it; Otherwise, no connection will be reused. In fact, even though you don't use any connection pool, closing connections is necessary to prevent resource leak. 
 
+#### Release connections
+
+Have you noticed the statement `conn.(*connpool.Conn).Release()` in the above example?
+
+```go
+if err := handle(conn); err != nil && isClosed(err) {
+    conn.(*connpool.Conn).Release()
+    // ... 
+}
+```
+
+Although the connection was dead, it doesn't mean you free its resources. We shouldn't call its `Close` method, because the invalid connection will be likely put into the pool again. By contrast, `Conn.Release` method is better, which can free the underlying connection directly. This strategy avoids that dead connections are repeatedly used.
 
 [connection pool]: https://en.wikipedia.org/wiki/Connection_pool
 [Go]: https://golang.org/
