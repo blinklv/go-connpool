@@ -105,18 +105,69 @@ type client struct {
 }
 
 type server struct {
-	address string // listen address
-	accept  chan struct {
+	address       net.Addr // listen address
+	delay         time.Duration
+	lifetime      time.Duration
+	sessionNumber int64
+	accept        chan struct {
 		*pipe
 		remote net.Addr
 	}
+}
+
+func (s *server) run() {
+	log.Printf("server (%s) start", s.address)
+outer:
+	for {
+		select {
+		case c := <-s.accept:
+			go (&session{s}).handle(&connection{
+				pipe:   c.pipe,
+				local:  s.address,
+				remote: c.remote,
+			})
+		case <-time.After(s.lifetime):
+			break outer
+		}
+	}
+	close(s.accept)
+	log.Printf("server (%s) stop", s.address)
+}
+
+type session struct {
+	s *server
+}
+
+func (s *session) handle(c net.Conn) {
+	var (
+		n   int
+		err error
+	)
+
+	atomic.AddInt64(&s.s.sessionNumber, 1)
+	for {
+		b := make([]byte, 1024)
+		n, err = c.Read(b)
+		if err != nil {
+			break
+		}
+		if _, err = c.Write(b[:n]); err != nil {
+			break
+		}
+	}
+
+	if !err.(*netError).Broken() {
+		log.Printf("handle connection (%s -> %s) error %s",
+			c.RemoteAddr(), c.LocalAddr(), err)
+	}
+	atomic.AddInt64(&s.s.sessionNumber, -1)
 }
 
 type dialer struct {
 	localPort int32
 }
 
-func (d *dialer) Dial(address string) (net.Conn, error) {
+func (d *dialer) Dial(address string) (conn net.Conn, err error) {
 	c := &connection{
 		pipe: &pipe{
 			read:  make(chan []byte),
@@ -129,6 +180,13 @@ func (d *dialer) Dial(address string) (net.Conn, error) {
 	// The connection will be returned to the user only after the server
 	// accept it.
 	s := servers[address]
+
+	defer func() {
+		if x := recover(); x != nil {
+			conn, err = nil, fmt.Errorf("server (%s) is down", address)
+		}
+	}()
+
 	s.accept <- struct {
 		*pipe
 		remote net.Addr
