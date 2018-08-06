@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-31
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2018-08-01
+// Last Change: 2018-08-06
 
 package connpool_test
 
@@ -12,19 +12,9 @@ import (
 	"github.com/blinklv/go-connpool"
 	"log"
 	"net"
+	"sync/atomic"
 	"time"
 )
-
-type connection struct{}
-
-func (c *connection) Read(b []byte) (int, error)         { return len(b), nil }
-func (c *connection) Write(b []byte) (int, error)        { return len(b), nil }
-func (c *connection) Close() error                       { return nil }
-func (c *connection) LocalAddr() net.Addr                { return nil }
-func (c *connection) RemoteAddr() net.Addr               { return nil }
-func (c *connection) SetDeadline(t time.Time) error      { return nil }
-func (c *connection) SetReadDeadline(t time.Time) error  { return nil }
-func (c *connection) SetWriteDeadline(t time.Time) error { return nil }
 
 func dial(address string) (net.Conn, error) {
 	return &connection{}, nil
@@ -85,4 +75,178 @@ func ExamplePool_Get() {
 func ExampleConn_Release() {
 	conn, _ := pool.New(selectAddress())
 	conn.(*connpool.Conn).Release()
+}
+
+// The following is a black box test for this package.
+var servers = map[string]*server{}
+
+// An implementation of the net.Error interface.
+type netError struct {
+	error
+	timeout   bool
+	temporary bool
+	broken    bool
+}
+
+func (ne *netError) Timeout() bool {
+	return ne.timeout
+}
+
+func (ne *netError) Temporary() bool {
+	return ne.temporary
+}
+
+func (ne *netError) Broken() bool {
+	return ne.broken
+}
+
+type client struct {
+	pool *connpool.Pool
+}
+
+type server struct {
+	address string // listen address
+	accept  chan struct {
+		*pipe
+		remote net.Addr
+	}
+}
+
+type dialer struct {
+	localPort int32
+}
+
+func (d *dialer) Dial(address string) (net.Conn, error) {
+	c := &connection{
+		pipe: &pipe{
+			read:  make(chan []byte),
+			write: make(chan []byte),
+		},
+		local:  resolveAddr(fmt.Sprintf("127.0.0.1:%d", atomic.AddInt32(&d.localPort, 1))),
+		remote: resolveAddr(address),
+	}
+
+	// The connection will be returned to the user only after the server
+	// accept it.
+	s := servers[address]
+	s.accept <- struct {
+		*pipe
+		remote net.Addr
+	}{
+		&pipe{read: c.pipe.write, write: c.pipe.read},
+		c.local,
+	}
+
+	return c, nil
+}
+
+type pipe struct {
+	read  chan []byte
+	write chan []byte
+}
+
+func (p *pipe) close() {
+	close(p.read)
+	close(p.write)
+}
+
+type connection struct {
+	*pipe
+	local         net.Addr
+	remote        net.Addr
+	readDeadline  time.Time
+	writeDeadline time.Time
+}
+
+func (c *connection) Read(b []byte) (int, error) {
+	timeout := make(<-chan time.Time)
+	if !c.readDeadline.IsZero() {
+		timeout = after(c.readDeadline.Sub(time.Now()))
+	}
+
+	select {
+	case data, more := <-c.pipe.read:
+		if !more {
+			return 0, &netError{
+				error:  fmt.Errorf("read broken pipe (%s -> %s)", c.remote, c.local),
+				broken: true,
+			}
+		}
+		// excess part will be discarded.
+		return copy(b, data), nil
+	case <-timeout:
+		return 0, &netError{
+			error:   fmt.Errorf("read timeout (%s -> %s)", c.remote, c.local),
+			timeout: true,
+		}
+	}
+}
+
+func (c *connection) Write(b []byte) (n int, err error) {
+	timeout := make(<-chan time.Time)
+	if !c.writeDeadline.IsZero() {
+		timeout = after(c.writeDeadline.Sub(time.Now()))
+	}
+
+	defer func() {
+		if x := recover(); x != nil {
+			n, err = 0, &netError{
+				error:  fmt.Errorf("write broken pipe (%s -> %s)", c.local, c.remote),
+				broken: true,
+			}
+		}
+	}()
+
+	select {
+	case c.pipe.write <- b:
+		return len(b), nil
+	case <-timeout:
+		return 0, &netError{
+			error:   fmt.Errorf("write timeout (%s -> %s)", c.local, c.remote),
+			timeout: true,
+		}
+	}
+}
+
+func (c *connection) Close() error {
+	c.pipe.close()
+	return nil
+}
+
+func (c *connection) LocalAddr() net.Addr {
+	return c.local
+}
+
+func (c *connection) RemoteAddr() net.Addr {
+	return c.remote
+}
+
+func (c *connection) SetDeadline(t time.Time) error {
+	c.readDeadline, c.writeDeadline = t, t
+	return nil
+}
+
+func (c *connection) SetReadDeadline(t time.Time) error {
+	c.readDeadline = t
+	return nil
+}
+
+func (c *connection) SetWriteDeadline(t time.Time) error {
+	c.writeDeadline = t
+	return nil
+}
+
+func after(d time.Duration) <-chan time.Time {
+	if d > 0 {
+		return time.After(d)
+	}
+
+	c := make(chan time.Time)
+	close(c)
+	return c
+}
+
+func resolveAddr(address string) net.Addr {
+	addr, _ := net.ResolveTCPAddr("tcp", address)
+	return addr
 }
