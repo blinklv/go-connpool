@@ -80,6 +80,40 @@ func ExampleConn_Release() {
 // The following is a black box test for this package.
 var servers = map[string]*server{}
 
+type addressUnit struct {
+	address string
+	count   int64
+	fail    int64
+}
+
+type scheduler struct {
+	i            int64
+	n            int
+	addressMap   map[string]*addressUnit
+	addressArray []*addressUnit
+}
+
+func (s *scheduler) initialize() {
+	for address, _ := range servers {
+		u := &addressUnit{address: address}
+		s.addressMap[address] = u
+		s.addressArray = append(s.addressArray, u)
+	}
+}
+
+func (s *scheduler) get() (string, error) {
+	i := int(atomic.AddInt64(&s.i, 1))
+	return s.addressArray[i%s.n].address, nil
+}
+
+func (s *scheduler) feedback(address string, ok bool) {
+	u := s.addressMap[address]
+	atomic.AddInt64(&u.count, 1)
+	if !ok {
+		atomic.AddInt64(&u.fail, 1)
+	}
+}
+
 // An implementation of the net.Error interface.
 type netError struct {
 	error
