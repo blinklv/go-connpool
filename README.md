@@ -64,17 +64,16 @@ if err != nil {
     return err
 }
 
-if err := handle(conn); err != nil && isClosed(err) {
+if err = handle(conn); err != nil && isClosed(err) {
     conn.(*connpool.Conn).Release()
     if conn, err = pool.New(address); err != nil {
         return err
     }
-    if err = handle(conn); err != nil {
-        return err
-    }
+    err = handle(conn)
 }
 
-return conn.Close()
+conn.Close()
+return err
 ```
 
 `Pool.New` creates a new connection by using the underlying dial field instead of acquiring a existing connection in the pool. This way can guarantee getting a valid connection in first retrying unless the background can't serve normally. No matter which way we use to get a connection from the pool, we must close it at the end. `Conn.Close` method tries to put the connection into the pool if there is enough room in which. This step is very critical, so you shouldn't ignore it; Otherwise, no connection will be reused. In fact, even though you don't use any connection pool, closing connections is necessary to prevent resource leak. 
