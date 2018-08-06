@@ -8,11 +8,15 @@
 package connpool_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/blinklv/go-connpool"
+	"io"
 	"log"
 	"net"
+	"sync"
 	"sync/atomic"
+	"testing"
 	"time"
 )
 
@@ -78,7 +82,59 @@ func ExampleConn_Release() {
 }
 
 // The following is a black box test for this package.
-var servers = map[string]*server{}
+func TestPool(t *testing.T) {
+	for _, s := range servers {
+		s := s
+		go s.run()
+	}
+
+	sched := &scheduler{addressMap: make(map[string]*addressUnit)}
+	sched.initialize()
+
+	d := &dialer{}
+	pool, _ := connpool.New(d.Dial, 128, 1*time.Minute)
+	cli := &client{pool, sched, d}
+	cli.run()
+}
+
+var servers = map[string]*server{
+	"192.168.0.1:80": &server{
+		address:  resolveAddr("192.168.0.1:80"),
+		delay:    10 * time.Millisecond,
+		lifetime: 5 * time.Minute,
+		accept: make(chan struct {
+			*pipe
+			remote net.Addr
+		}),
+	},
+	"192.168.0.2:80": &server{
+		address:  resolveAddr("192.168.0.2:80"),
+		delay:    50 * time.Millisecond,
+		lifetime: 10 * time.Minute,
+		accept: make(chan struct {
+			*pipe
+			remote net.Addr
+		}),
+	},
+	"192.168.0.3:80": &server{
+		address:  resolveAddr("192.168.0.3:80"),
+		delay:    100 * time.Millisecond,
+		lifetime: 20 * time.Minute,
+		accept: make(chan struct {
+			*pipe
+			remote net.Addr
+		}),
+	},
+	"192.168.0.4:80": &server{
+		address:  resolveAddr("192.168.0.4:80"),
+		delay:    200 * time.Millisecond,
+		lifetime: 20 * time.Minute,
+		accept: make(chan struct {
+			*pipe
+			remote net.Addr
+		}),
+	},
+}
 
 type addressUnit struct {
 	address string
@@ -99,6 +155,7 @@ func (s *scheduler) initialize() {
 		s.addressMap[address] = u
 		s.addressArray = append(s.addressArray, u)
 	}
+	s.n = len(s.addressArray)
 }
 
 func (s *scheduler) get() (string, error) {
@@ -136,6 +193,78 @@ func (ne *netError) Broken() bool {
 
 type client struct {
 	pool *connpool.Pool
+	s    *scheduler
+	d    *dialer
+}
+
+func (c *client) run() {
+	go func() {
+		for {
+			time.Sleep(10 * time.Second)
+			c.stats()
+		}
+	}()
+
+	handle := func(conn net.Conn) error {
+		_, err := io.WriteString(conn, "hello world")
+		if err != nil {
+			return err
+		}
+
+		buf := make([]byte, 1024)
+		_, err = conn.Read(buf)
+		return err
+	}
+
+	var (
+		wg       = &sync.WaitGroup{}
+		wn int32 = 1024
+	)
+
+	for i := 0; i < 1024; i++ {
+		wg.Add(1)
+		go func() {
+			for i := 0; i < 50000; i++ {
+				address, _ := c.s.get()
+
+				err := func() error {
+					conn, err := c.pool.Get(address)
+					if err != nil {
+						return err
+					}
+
+					if err = handle(conn); err != nil && err.(*netError).Broken() {
+						conn.(*connpool.Conn).Release()
+						if conn, err = c.pool.New(address); err != nil {
+							return err
+						}
+						err = handle(conn)
+					}
+					conn.Close()
+					return err
+				}()
+				c.s.feedback(address, err == nil)
+			}
+			wg.Done()
+			atomic.AddInt32(&wn, -1)
+		}()
+	}
+
+	wg.Wait()
+	c.stats()
+	c.pool.Close()
+	c.stats()
+}
+
+func (c *client) stats() {
+	stats := c.pool.Stats()
+	data, _ := json.MarshalIndent(stats, " ", " ")
+	log.Printf("%s", data)
+	for _, u := range c.s.addressArray {
+		log.Printf("(%s) total: %d fail: %d",
+			u.address, atomic.LoadInt64(&u.count), atomic.LoadInt64(&u.fail))
+	}
+	log.Printf("dial-count %d", atomic.LoadInt64(&c.d.count))
 }
 
 type server struct {
@@ -151,6 +280,7 @@ type server struct {
 
 func (s *server) run() {
 	log.Printf("server (%s) start", s.address)
+	timeout := time.After(s.lifetime)
 outer:
 	for {
 		select {
@@ -160,7 +290,7 @@ outer:
 				local:  s.address,
 				remote: c.remote,
 			})
-		case <-time.After(s.lifetime):
+		case <-timeout:
 			break outer
 		}
 	}
@@ -199,6 +329,7 @@ func (s *session) handle(c net.Conn) {
 
 type dialer struct {
 	localPort int32
+	count     int64
 }
 
 func (d *dialer) Dial(address string) (conn net.Conn, err error) {
@@ -207,6 +338,7 @@ func (d *dialer) Dial(address string) (conn net.Conn, err error) {
 			read:  make(chan []byte),
 			write: make(chan []byte),
 		},
+		d:      d,
 		local:  resolveAddr(fmt.Sprintf("127.0.0.1:%d", atomic.AddInt32(&d.localPort, 1))),
 		remote: resolveAddr(address),
 	}
@@ -229,6 +361,7 @@ func (d *dialer) Dial(address string) (conn net.Conn, err error) {
 		c.local,
 	}
 
+	atomic.AddInt64(&d.count, 1)
 	return c, nil
 }
 
@@ -244,6 +377,7 @@ func (p *pipe) close() {
 
 type connection struct {
 	*pipe
+	d             *dialer
 	local         net.Addr
 	remote        net.Addr
 	readDeadline  time.Time
@@ -302,6 +436,7 @@ func (c *connection) Write(b []byte) (n int, err error) {
 
 func (c *connection) Close() error {
 	c.pipe.close()
+	atomic.AddInt64(&c.d.count, -1)
 	return nil
 }
 
