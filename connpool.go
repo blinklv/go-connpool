@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2018-08-06
+// Last Change: 2018-08-08
 
 // A concurrent safe connection pool. It can be used to manage and reuse connections
 // based on the destination address of which. This design make a pool work better with
@@ -371,12 +371,18 @@ func (b *bucket) _iterate(backup *element, shutdown bool) (*element, int) {
 
 	// We only handle the first 16 connection at once; this will prevent this
 	// loop costs so much time when the list is too long.
-	for tail, i = backup, 0; backup != nil && i < 16; i++ {
+	for i = 0; backup != nil && i < 16; i++ {
 		current, backup = backup, backup.next
 		if !shutdown && b.size < b.capacity && current.conn.state == 1 {
+			// 'tail' records the first active connection in this iteration. Becase we push
+			// active connections to the temporary bucket, which will reverse the elements
+			// order in the original bucket. The first active element will become the last
+			// element of the temporary bucket, so I named it 'tail'.
+			if top == nil {
+				tail = current
+			}
+
 			current.conn.state = 0
-			// NOTE: Because we push the active connection to the temporary bucket.
-			// which will reverse the elements order in the original bucket..
 			top, current.next = current, top
 			b.size++
 			atomic.AddInt64(&b.idle, 1)
