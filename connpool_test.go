@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-11
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2018-07-31
+// Last Change: 2018-08-08
 
 package connpool
 
@@ -625,6 +625,65 @@ func TestBucketClean(t *testing.T) {
 	}
 }
 
+func TestBucketCleanEx(t *testing.T) {
+	elements := []struct {
+		b *bucket
+		d *dialer
+	}{
+		{
+			b: &bucket{capacity: 256},
+			d: &dialer{},
+		},
+		{
+			b: &bucket{capacity: 1024},
+			d: &dialer{},
+		},
+		{
+			b: &bucket{capacity: 2048},
+			d: &dialer{},
+		},
+		{
+			b: &bucket{capacity: 4096},
+			d: &dialer{},
+		},
+		{
+			b: &bucket{capacity: 10000},
+			d: &dialer{},
+		},
+	}
+
+	for _, e := range elements {
+		_, expectedUnused := bucketRandomPush(e.b, e.d, e.b.capacity)
+		assert.Equal(t, true, checkOrder(e.b, false))
+		unused := e.b.clean(false)
+		t.Logf("expected/actual unused (%d/%d) size/actual-size (%d/%d)",
+			expectedUnused, unused, e.b.size, e.b._size())
+		assert.Equal(t, e.b.capacity, e.b.size+unused)
+		assert.Equal(t, expectedUnused, unused)
+		assert.Equal(t, true, checkOrder(e.b, true))
+	}
+}
+
+func checkOrder(b *bucket, asc bool) bool {
+	var prev int
+
+	if !asc {
+		// descending order.
+		prev = b.capacity + 1
+	}
+
+	for top := b.top; top != nil; top = top.next {
+		current := top.conn.Conn.(*connection).index
+		if asc && current < prev {
+			return false
+		} else if !asc && current > prev {
+			return false
+		}
+		prev = current
+	}
+	return true
+}
+
 // This is an auxiliary connection type to print some operation information.
 // It satisfies net.Conn interface (But it doesn't satisfy all requirements
 // in comments of each method).
@@ -632,6 +691,7 @@ type connection struct {
 	d      *dialer
 	local  net.Addr
 	remote net.Addr
+	index  int
 }
 
 func (c *connection) Read(b []byte) (int, error) {
@@ -674,8 +734,8 @@ type dialer struct {
 
 func (d *dialer) Dial(address string) (net.Conn, error) {
 	c := &connection{d: d}
-	c.local, _ = net.ResolveTCPAddr("tcp",
-		fmt.Sprintf("127.0.0.1:%d", atomic.AddInt32(&d.localPort, 1)))
+	c.index = int(atomic.AddInt32(&d.localPort, 1))
+	c.local, _ = net.ResolveTCPAddr("tcp", fmt.Sprintf("127.0.0.1:%d", c.index))
 	c.remote, _ = net.ResolveTCPAddr("tcp", address)
 	atomic.AddInt64(&d.count, 1)
 	return c, nil
@@ -732,6 +792,24 @@ func bucketPush(b *bucket, d *dialer, number int) (i int) {
 		if b.push(c) != nil {
 			c.Close()
 			break
+		}
+	}
+	return
+}
+
+func bucketRandomPush(b *bucket, d *dialer, number int) (i, unused int) {
+	bg := newBoolgen()
+	for i = 0; i < number; i++ {
+		conn, _ := d.Dial("192.168.1.100:80")
+		c := b.bind(conn)
+		if b.push(c) != nil {
+			c.Close()
+			break
+		}
+
+		if bg.Bool() {
+			c.state = 0
+			unused++
 		}
 	}
 	return
