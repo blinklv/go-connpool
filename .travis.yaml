@@ -1,0 +1,7 @@
+language: go
+go:
+    - 1.x
+sudo: false
+go_import_path: github.com/blinklv/go-connpool
+notifications:
+    email: false
