@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-31
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2018-08-06
+// Last Change: 2018-08-08
 
 package connpool_test
 
@@ -92,7 +92,7 @@ func TestPool(t *testing.T) {
 	sched.initialize()
 
 	d := &dialer{}
-	pool, _ := connpool.New(d.Dial, 128, 1*time.Minute)
+	pool, _ := connpool.New(d.Dial, 1024, 1*time.Minute)
 	cli := &client{pool, sched, d}
 	cli.run()
 }
@@ -264,7 +264,7 @@ func (c *client) stats() {
 		log.Printf("(%s) total: %d fail: %d",
 			u.address, atomic.LoadInt64(&u.count), atomic.LoadInt64(&u.fail))
 	}
-	log.Printf("dial-count %d", atomic.LoadInt64(&c.d.count))
+	log.Printf("dial-count/total %d/%d", atomic.LoadInt64(&c.d.count), atomic.LoadInt64(&c.d.total))
 }
 
 type server struct {
@@ -330,6 +330,7 @@ func (s *session) handle(c net.Conn) {
 type dialer struct {
 	localPort int32
 	count     int64
+	total     int64
 }
 
 func (d *dialer) Dial(address string) (conn net.Conn, err error) {
@@ -362,6 +363,7 @@ func (d *dialer) Dial(address string) (conn net.Conn, err error) {
 	}
 
 	atomic.AddInt64(&d.count, 1)
+	atomic.AddInt64(&d.total, 1)
 	return c, nil
 }
 
