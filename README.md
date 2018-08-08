@@ -1,5 +1,6 @@
 # go-connpool
 
+[![Build Status](https://travis-ci.com/blinklv/go-connpool.svg?branch=master)](https://travis-ci.com/blinklv/go-connpool)
 [![GoDoc](https://godoc.org/github.com/nsqio/go-nsq?status.svg)](https://godoc.org/github.com/blinklv/go-connpool)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -46,9 +47,9 @@ You can get a connection from your `Pool` instance, the destination address of w
 
 ```go
 conn, err := pool.Get(selectAddress())
-    if err != nil {
-        return err
-    }
+if err != nil {
+    return err
+}
 if err = handle(conn); err != nil {
     return err
 }
@@ -90,6 +91,7 @@ if err := handle(conn); err != nil && isClosed(err) {
 ```
 
 Although the connection was dead, it doesn't mean you free its resources. We shouldn't call its `Close` method, because the invalid connection will be likely put into the pool again. By contrast, `Conn.Release` method is better, which can free the underlying connection directly. This strategy avoids that dead connections are repeatedly used.
+
 
 [connection pool]: https://en.wikipedia.org/wiki/Connection_pool
 [Go]: https://golang.org/
