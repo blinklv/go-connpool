@@ -4,11 +4,11 @@
 [![GoDoc](https://godoc.org/github.com/nsqio/go-nsq?status.svg)](https://godoc.org/github.com/blinklv/go-connpool)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A concurrent safe [connection pool][] package in [Go][]. It can be used to manage and reuse connections based on the destination address of which. This design make a pool work better with some [load balancers][load balancing].
+A concurrent safe [connection pool][] package in [Go][]. It can be used to manage and reuse connections based on the destination address of which. This design make a pool work better with some [name server][]s.
 
 ## Motivation
 
-In some cases, your backend servers have multiple addresses. Before you access a specific server, you need to get the address of which from load balancers. The address configuration in load balanchers usually will be modified in the future, like removing records or adjusting weights. So a connection pool which can respond to these changes quickly is needed. This is why this pool exists. 
+In some cases, your backend servers have multiple addresses. Before you access a specific server, you need to get the address of which from a name server. The configuration of addresses in the name server usually will be modified in the future, like removing records or adjusting weights. So a connection pool which can respond to these changes quickly is needed. This is why this pool exists. 
 
 
 ## Installation
@@ -61,7 +61,7 @@ if err = handle(conn); err != nil {
 return conn.Close()
 ```
 
-`selectAddress` and `handle` function in above example are your custom functions. The former one can return an available destination address; it's usually related to a load balancer. The latter one specifies how to handle the connection. How should we do if we get a dead connection? Which means the connection has been closed by the peer but not detected. Can we invoke `Pool.Get` method with the same address again? It can work in normal cases. However, what if we fail again? The most terrible thing is that all idle connections corresponded to the address have been dead, which might happen when the backend server was crashed. In this bad case, retrying will take a lot of time. `Pool.New` is an alternative method; it's more suitable for solving this problem. 
+`selectAddress` and `handle` function in above example are your custom functions. The former one can return an available destination address; it's usually related to a name server. The latter one specifies how to handle the connection. How should we do if we get a dead connection? Which means the connection has been closed by the peer but not detected. Can we invoke `Pool.Get` method with the same address again? It can work in normal cases. However, what if we fail again? The most terrible thing is that all idle connections corresponded to the address have been dead, which might happen when the backend server was crashed. In this bad case, retrying will take a lot of time. `Pool.New` is an alternative method; it's more suitable for solving this problem. 
 
 ```go
 address := selectAddress()
@@ -100,4 +100,4 @@ Although the connection was dead, it doesn't mean you free its resources. We sho
 
 [connection pool]: https://en.wikipedia.org/wiki/Connection_pool
 [Go]: https://golang.org/
-[load balancing]: https://en.wikipedia.org/wiki/Load_balancing_(computing)
+[name server]: https://en.wikipedia.org/wiki/Name_server
