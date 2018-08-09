@@ -98,6 +98,10 @@ if err := handle(conn); err != nil && isClosed(err) {
 Although the connection was dead, it doesn't mean you free its resources. We shouldn't call its `Close` method, because the invalid connection will be likely put into the pool again. By contrast, `Conn.Release` method is better, which can free the underlying connection directly. This strategy avoids that dead connections are repeatedly used.
 
 
+## License 
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details
+
 [connection pool]: https://en.wikipedia.org/wiki/Connection_pool
 [Go]: https://golang.org/
 [name server]: https://en.wikipedia.org/wiki/Name_server
