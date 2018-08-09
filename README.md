@@ -4,11 +4,11 @@
 [![GoDoc](https://godoc.org/github.com/nsqio/go-nsq?status.svg)](https://godoc.org/github.com/blinklv/go-connpool)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A concurrent safe [connection pool][] package in [Go][]. It can be used to manage and reuse connections based on the destination address of which. This design make a pool work better with some [name server][]s.
+A concurrent safe [connection pool][] package in [Go][]. It can be used to manage and reuse connections based on the destination address of which. This design makes a pool work better with some [name server][]s.
 
 ## Motivation
 
-In some cases, your backend servers have multiple addresses. Before you access a specific server, you need to get the address of which from a name server. The configuration of addresses in the name server usually will be modified in the future, like removing records or adjusting weights. So a connection pool which can respond to these changes quickly is needed. This is why this pool exists. 
+In some cases, your backend servers have multiple addresses. Before you access a specific server, you need to get the address of which from a name server. The configuration of addresses in the name server usually will be modified in the future, like removing records or adjusting weights. So a connection pool which can respond to these changes quickly is needed, which is why this pool exists. 
 
 
 ## Installation
@@ -48,7 +48,7 @@ pool.Close()
 
 #### Get and create connections from a pool
 
-You can get a connection from your `Pool` instance, the destination address of which is equal to the `address` argument passed by you. If there exists some idle connections related to this address in the pool, one of which will be returned directly to you. I think this is why we use the connection pool. 
+You can get a connection from your `Pool` instance, the destination address of which is equal to the `address` argument passed by you. If there exist some idle connections related to this address in the pool, one of which will be returned directly to you. I think this is why we use the connection pool. 
 
 ```go
 conn, err := pool.Get(selectAddress())
@@ -61,7 +61,7 @@ if err = handle(conn); err != nil {
 return conn.Close()
 ```
 
-`selectAddress` and `handle` function in above example are your custom functions. The former one can return an available destination address; it's usually related to a name server. The latter one specifies how to handle the connection. How should we do if we get a dead connection? Which means the connection has been closed by the peer but not detected. Can we invoke `Pool.Get` method with the same address again? It can work in normal cases. However, what if we fail again? The most terrible thing is that all idle connections corresponded to the address have been dead, which might happen when the backend server was crashed. In this bad case, retrying will take a lot of time. `Pool.New` is an alternative method; it's more suitable for solving this problem. 
+`selectAddress` and `handle` function in the above example are your custom functions. The former one can return an available destination address; it's usually related to a name server. The latter one specifies how to handle the connection. How should we do if we get a dead connection, which means the connection has been closed by the peer but not detected? Can we invoke `Pool.Get` method with the same address again? It can work in typical cases. However, what if we still fail? The most terrible thing is that all idle connections corresponded to the address have been dead, which might happen when the backend server was crashed. In this lousy case, retrying will take a lot of time. `Pool.New` is an alternative method; it's more suitable for solving this problem. 
 
 ```go
 address := selectAddress()
@@ -82,7 +82,7 @@ conn.Close()
 return err
 ```
 
-`Pool.New` creates a new connection by using the underlying dial field instead of acquiring a existing connection in the pool. This way can guarantee getting a valid connection in first retrying unless the background can't serve normally. No matter which way we use to get a connection from the pool, we must close it at the end. `Conn.Close` method tries to put the connection into the pool if there is enough room in which. This step is very critical, so you shouldn't ignore it; Otherwise, no connection will be reused. In fact, even though you don't use any connection pool, closing connections is necessary to prevent resource leak. 
+`Pool.New` creates a new connection by using the underlying dial field instead of acquiring an existing connection in the pool. This way can guarantee to get a valid connection in the first retrying unless the background can't serve normally. No matter which way we use to get a connection from the pool, we must close it at the end. `Conn.Close` method tries to put the connection into the pool if there is enough room in which. This step is very critical, so you shouldn't ignore it; Otherwise, no connection will be reused. In fact, even though you don't use any connection pool, closing connections is necessary to prevent resource leak. 
 
 #### Release connections
 

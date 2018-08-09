@@ -6,7 +6,7 @@
 // Last Change: 2018-08-09
 
 // A concurrent safe connection pool. It can be used to manage and reuse connections
-// based on the destination address of which. This design make a pool work better with
+// based on the destination address of which. This design makes a pool work better with
 // some name servers.
 package connpool
 
