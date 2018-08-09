@@ -6,7 +6,12 @@
 
 A concurrent safe [connection pool][] package in [Go][]. It can be used to manage and reuse connections based on the destination address of which. This design make a pool work better with some [load balancers][load balancing].
 
-## Install
+## Motivation
+
+In some cases, your backend servers have multiple addresses. Before you access a specific server, you need to get the address of which from load balancers. The address configuration in load balanchers usually will be modified in the future, like removing records or adjusting weights. So a connection pool which can respond to these changes quickly is needed. This is why this pool exists. 
+
+
+## Installation
 
 ```bash
 $ go get github.com/blinklv/go-connpool
