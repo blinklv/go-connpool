@@ -1,7 +1,7 @@
 # go-connpool
 
 [![Build Status](https://travis-ci.com/blinklv/go-connpool.svg?branch=master)](https://travis-ci.com/blinklv/go-connpool)
-[![GoDoc](https://godoc.org/github.com/nsqio/go-nsq?status.svg)](https://godoc.org/github.com/blinklv/go-connpool)
+[![GoDoc](https://godoc.org/github.com/blinklv/go-connpool?status.svg)](https://godoc.org/github.com/blinklv/go-connpool)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A concurrent safe [connection pool][] package in [Go][]. It can be used to manage and reuse connections based on the destination address of which. This design makes a pool work better with some [name server][]s.
