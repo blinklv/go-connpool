@@ -3,9 +3,9 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2018-08-09
+// Last Change: 2018-10-15
 
-// A concurrent safe connection pool. It can be used to manage and reuse connections
+// A concurrency-safe connection pool. It can be used to manage and reuse connections
 // based on the destination address of which. This design makes a pool work better with
 // some name servers.
 package connpool
