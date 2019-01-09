@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-11
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2018-08-08
+// Last Change: 2019-01-09
 
 package connpool
 
@@ -482,7 +482,7 @@ func TestBucketPop(t *testing.T) {
 	}
 }
 
-func TestBucketClean(t *testing.T) {
+func TestBucketCleanup(t *testing.T) {
 	type element struct {
 		t  *testing.T
 		b  *bucket
@@ -598,7 +598,7 @@ func TestBucketClean(t *testing.T) {
 
 		bucketFill(e.b, e.d)
 		go func() {
-			unused = e.b.clean(false)
+			unused = e.b.cleanup(false)
 			close(cleanDone)
 		}()
 
@@ -619,13 +619,13 @@ func TestBucketClean(t *testing.T) {
 		assert.Equal(t, int(e.b.total)-e.b.capacity, e.pushNumber-(e.popNumber+unused))
 
 		size := e.b.size
-		unused = e.b.clean(true)
+		unused = e.b.cleanup(true)
 		assert.Equal(t, 0, int(e.d.count))
 		assert.Equal(t, size, unused)
 	}
 }
 
-func TestBucketCleanEx(t *testing.T) {
+func TestBucketCleanupEx(t *testing.T) {
 	elements := []struct {
 		b *bucket
 		d *dialer
@@ -655,7 +655,7 @@ func TestBucketCleanEx(t *testing.T) {
 	for _, e := range elements {
 		_, expectedUnused := bucketRandomPush(e.b, e.d, e.b.capacity)
 		assert.Equal(t, true, checkOrder(e.b, false))
-		unused := e.b.clean(false)
+		unused := e.b.cleanup(false)
 		t.Logf("expected/actual unused (%d/%d) size/actual-size (%d/%d)",
 			expectedUnused, unused, e.b.size, e.b._size())
 		assert.Equal(t, e.b.capacity, e.b.size+unused)

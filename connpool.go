@@ -54,7 +54,7 @@ type Pool struct {
 // The 'capacity' parameter controls the maximum idle connections to keep per-host
 // (not all hosts). The 'timeout' parameter is the maximum amount of time an idle
 // connection will remain idle before closing itself. It can't be less than 1 min
-// in this version; Otherwise, many CPU cycles are occupied by the 'clean' task.
+// in this version; Otherwise, many CPU cycles are occupied by the 'cleanup' task.
 // I usually set it to 3 ~ 5 min, but if there exist too many resident connections
 // in your program, this value should be larger.
 func New(dial Dial, capacity int, timeout time.Duration) (*Pool, error) {
@@ -77,9 +77,9 @@ func New(dial Dial, capacity int, timeout time.Duration) (*Pool, error) {
 		bs:       make(map[string]*bucket),
 		exit:     make(chan chan struct{}),
 	}
-	// The clean method runs in a new goroutine. In fact, the primary objective of
+	// The cleanup method runs in a new goroutine. In fact, the primary objective of
 	// designing the Close method is stopping it to prevent resource leak.
-	go pool.clean()
+	go pool.cleanup()
 
 	return pool, nil
 }
@@ -200,7 +200,7 @@ func (pool *Pool) selectBucket(address string) (b *bucket) {
 }
 
 // Clean idle connections periodically.
-func (pool *Pool) clean() {
+func (pool *Pool) cleanup() {
 	var (
 		ticker = time.NewTicker(pool.timeout)
 		bs     []*bucket
@@ -211,19 +211,19 @@ func (pool *Pool) clean() {
 		case <-ticker.C:
 			pool.rwlock.RLock()
 			for _, b := range pool.bs {
-				// If we invoke bucket's clean method in this for loop it will cause the
+				// If we invoke bucket's cleanup method in this for loop it will cause the
 				// Get or the New method waiting for too long when creates a new bucket.
 				bs = append(bs, b)
 			}
 			pool.rwlock.RUnlock()
 
 			for _, b := range pool.bs {
-				b.clean(false)
+				b.cleanup(false)
 			}
 		case exitDone := <-pool.exit:
 			ticker.Stop()
 			for _, b := range pool.bs {
-				b.clean(true)
+				b.cleanup(true)
 			}
 			close(exitDone)
 		}
@@ -308,7 +308,7 @@ func (b *bucket) bind(c net.Conn) *Conn {
 // unavailability when the list is too long. The current strategy is dividing this task
 // into a number of small parts; other methods have a chance to get the lock between two
 // subtasks.
-func (b *bucket) clean(shutdown bool) (unused int) {
+func (b *bucket) cleanup(shutdown bool) (unused int) {
 
 	for backup, inc := (*element)(nil), 0; ; {
 		backup, inc = b.iterate(backup, shutdown)
@@ -341,7 +341,7 @@ func (b *bucket) iterate(backup *element, shutdown bool) (*element, int) {
 
 	// The 'closed' field of a bucket will be set to true only when the Close
 	// method of the pool is invoked. The following assignment is placed in the
-	// bucket.clean method may be better from the view of semantics, but if we
+	// bucket.cleanup method may be better from the view of semantics, but if we
 	// do that, we need some additional works (add lock) to protect it. However,
 	// these works can be omitted in this method.
 	b.closed = shutdown
