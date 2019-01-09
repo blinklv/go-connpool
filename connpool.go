@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2018-10-15
+// Last Change: 2019-01-09
 
 // A concurrency-safe connection pool. It can be used to manage and reuse connections
 // based on the destination address of which. This design makes a pool work better with
@@ -369,7 +369,7 @@ func (b *bucket) _iterate(backup *element, shutdown bool) (*element, int) {
 		i, unused int
 	)
 
-	// We only handle the first 16 connection at once; this will prevent this
+	// We only handle the first 16 connections at once; this will prevent this
 	// loop costs so much time when the list is too long.
 	for i = 0; backup != nil && i < 16; i++ {
 		current, backup = backup, backup.next
