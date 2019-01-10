@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-11
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-01-09
+// Last Change: 2019-01-10
 
 package connpool
 
@@ -22,7 +22,7 @@ func TestNewPool(t *testing.T) {
 	elements := []struct {
 		dial     Dial
 		capacity int
-		timeout  time.Duration
+		period   time.Duration
 		ok       bool
 	}{
 		// Correct.
@@ -31,7 +31,7 @@ func TestNewPool(t *testing.T) {
 				return net.Dial("tcp", address)
 			},
 			capacity: 128,
-			timeout:  5 * time.Minute,
+			period:   5 * time.Minute,
 			ok:       true,
 		},
 		{
@@ -39,7 +39,7 @@ func TestNewPool(t *testing.T) {
 				return (&dialer{}).Dial(address)
 			},
 			capacity: 128,
-			timeout:  5 * time.Minute,
+			period:   5 * time.Minute,
 			ok:       true,
 		},
 		{
@@ -47,7 +47,7 @@ func TestNewPool(t *testing.T) {
 				return (&dialer{}).Dial(address)
 			},
 			capacity: 0,
-			timeout:  5 * time.Minute,
+			period:   5 * time.Minute,
 			ok:       true,
 		},
 		{
@@ -55,7 +55,7 @@ func TestNewPool(t *testing.T) {
 				return (&dialer{}).Dial(address)
 			},
 			capacity: 128,
-			timeout:  1 * time.Minute,
+			period:   1 * time.Minute,
 			ok:       true,
 		},
 
@@ -63,7 +63,7 @@ func TestNewPool(t *testing.T) {
 		{
 			dial:     nil,
 			capacity: 128,
-			timeout:  3 * time.Minute,
+			period:   3 * time.Minute,
 			ok:       false,
 		},
 		{
@@ -71,7 +71,7 @@ func TestNewPool(t *testing.T) {
 				return (&dialer{}).Dial(address)
 			},
 			capacity: -1,
-			timeout:  3 * time.Minute,
+			period:   3 * time.Minute,
 			ok:       false,
 		},
 		{
@@ -79,13 +79,13 @@ func TestNewPool(t *testing.T) {
 				return (&dialer{}).Dial(address)
 			},
 			capacity: 128,
-			timeout:  time.Second,
+			period:   time.Second,
 			ok:       false,
 		},
 	}
 
 	for _, e := range elements {
-		pool, err := New(e.dial, e.capacity, e.timeout)
+		pool, err := New(e.dial, e.capacity, e.period)
 		if e.ok {
 			assert.NotEqual(t, (*Pool)(nil), pool)
 			assert.Equal(t, nil, err)
@@ -109,14 +109,14 @@ func TestPoolNew(t *testing.T) {
 
 	elements := []struct {
 		capacity  int
-		timeout   time.Duration
+		period    time.Duration
 		d         *dialer
 		ws        *workers
 		addresses []*address
 	}{
 		{
 			capacity: 128,
-			timeout:  3 * time.Minute,
+			period:   3 * time.Minute,
 			d:        &dialer{},
 			ws:       &workers{wn: 1, number: 512},
 			addresses: []*address{
@@ -128,7 +128,7 @@ func TestPoolNew(t *testing.T) {
 		},
 		{
 			capacity: 256,
-			timeout:  3 * time.Minute,
+			period:   3 * time.Minute,
 			d:        &dialer{},
 			ws:       &workers{wn: 4, number: 512},
 			addresses: []*address{
@@ -142,7 +142,7 @@ func TestPoolNew(t *testing.T) {
 		},
 		{
 			capacity: 512,
-			timeout:  3 * time.Minute,
+			period:   3 * time.Minute,
 			d:        &dialer{},
 			ws:       &workers{wn: 16, number: 2048},
 			addresses: []*address{
@@ -162,7 +162,7 @@ func TestPoolNew(t *testing.T) {
 
 	for _, e := range elements {
 		e := e
-		pool, _ := New(e.d.Dial, e.capacity, e.timeout)
+		pool, _ := New(e.d.Dial, e.capacity, e.period)
 		e.ws.cb = func(i int) error {
 			addr := selectAddress(e.addresses)
 			c, _ := pool.New(addr.value)
@@ -218,7 +218,7 @@ func TestPoolGet(t *testing.T) {
 
 	elements := []struct {
 		capacity  int
-		timeout   time.Duration
+		period    time.Duration
 		delay     time.Duration
 		d         *dialer
 		ws        *workers
@@ -226,7 +226,7 @@ func TestPoolGet(t *testing.T) {
 	}{
 		{
 			capacity: 128,
-			timeout:  3 * time.Minute,
+			period:   3 * time.Minute,
 			d:        &dialer{},
 			ws:       &workers{wn: 1, number: 512},
 			addresses: []*address{
@@ -238,7 +238,7 @@ func TestPoolGet(t *testing.T) {
 		},
 		{
 			capacity: 128,
-			timeout:  3 * time.Minute,
+			period:   3 * time.Minute,
 			d:        &dialer{},
 			ws:       &workers{wn: 128, number: 512},
 			addresses: []*address{
@@ -250,7 +250,7 @@ func TestPoolGet(t *testing.T) {
 		},
 		{
 			capacity: 128,
-			timeout:  3 * time.Minute,
+			period:   3 * time.Minute,
 			d:        &dialer{},
 			ws:       &workers{wn: 256, number: 512},
 			addresses: []*address{
@@ -260,7 +260,7 @@ func TestPoolGet(t *testing.T) {
 		},
 		{
 			capacity: 128,
-			timeout:  3 * time.Minute,
+			period:   3 * time.Minute,
 			d:        &dialer{},
 			ws:       &workers{wn: 512, number: 1024},
 			addresses: []*address{
@@ -270,7 +270,7 @@ func TestPoolGet(t *testing.T) {
 		},
 		{
 			capacity: 128,
-			timeout:  3 * time.Minute,
+			period:   3 * time.Minute,
 			delay:    10 * time.Millisecond,
 			d:        &dialer{},
 			ws:       &workers{wn: 512, number: 1024},
@@ -291,7 +291,7 @@ func TestPoolGet(t *testing.T) {
 
 	for _, e := range elements {
 		e := e
-		pool, _ := New(e.d.Dial, e.capacity, e.timeout)
+		pool, _ := New(e.d.Dial, e.capacity, e.period)
 		e.ws.cb = func(i int) error {
 			addr := selectAddress(e.addresses)
 			c, _ := pool.Get(addr.value)
