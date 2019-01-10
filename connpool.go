@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-01-09
+// Last Change: 2019-01-10
 
 // A concurrency-safe connection pool. It can be used to manage and reuse connections
 // based on the destination address of which. This design makes a pool work better with
@@ -38,12 +38,12 @@ type Pool struct {
 	rwlock   sync.RWMutex
 	dial     Dial
 	capacity int
-	timeout  time.Duration
+	period   time.Duration
 	bs       map[string]*bucket
 	exit     chan chan struct{}
 }
 
-// Create a connection pool. The 'dial' parameter defines how to create a new
+// Create a connection pool. The dial parameter defines how to create a new
 // connection. You can't directly use the raw net.Dial function, but I think
 // wrapping it on the named network (tcp, udp and unix etc) is easy, as follows:
 //
@@ -51,13 +51,13 @@ type Pool struct {
 //      return net.Dial("tcp", address)
 //  }
 //
-// The 'capacity' parameter controls the maximum idle connections to keep per-host
-// (not all hosts). The 'timeout' parameter is the maximum amount of time an idle
-// connection will remain idle before closing itself. It can't be less than 1 min
-// in this version; Otherwise, many CPU cycles are occupied by the 'cleanup' task.
-// I usually set it to 3 ~ 5 min, but if there exist too many resident connections
-// in your program, this value should be larger.
-func New(dial Dial, capacity int, timeout time.Duration) (*Pool, error) {
+// The capacity parameter controls the maximum idle connections to keep per-host
+// (not all hosts). The period parameter specifies period between two cleanup ops,
+// which closes some idle connections not used for a long time (about 1~2 period).
+// It can't be less than 1 min in this version; otherwise, many CPU cycles are
+// occupied by the cleanup task. I usually set it to 3 ~ 5 min, but if there exist
+// too many resident connections in your program, this value should be larger.
+func New(dial Dial, capacity int, period time.Duration) (*Pool, error) {
 	if dial == nil {
 		return nil, fmt.Errorf("dial can't be nil")
 	}
@@ -66,14 +66,14 @@ func New(dial Dial, capacity int, timeout time.Duration) (*Pool, error) {
 		return nil, fmt.Errorf("capacity (%d) can't be less than zero", capacity)
 	}
 
-	if timeout < time.Minute {
-		return nil, fmt.Errorf("timeout (%s) can't be less than 1 min", timeout)
+	if period < time.Minute {
+		return nil, fmt.Errorf("cleanup period (%s) can't be less than 1 min", period)
 	}
 
 	pool := &Pool{
 		dial:     dial,
 		capacity: capacity,
-		timeout:  timeout,
+		period:   period,
 		bs:       make(map[string]*bucket),
 		exit:     make(chan chan struct{}),
 	}
@@ -202,7 +202,7 @@ func (pool *Pool) selectBucket(address string) (b *bucket) {
 // Clean idle connections periodically.
 func (pool *Pool) cleanup() {
 	var (
-		ticker = time.NewTicker(pool.timeout)
+		ticker = time.NewTicker(pool.period)
 		bs     []*bucket
 	)
 
