@@ -27,7 +27,7 @@ You need to create a `Pool` instance at first. There're three parameters you sho
 
 - `dial`: defines how to create a new connection.
 - `capacity`: controls the maximum idle connections to keep **per-host** (*not all hosts*).
-- `timeout`: maximum amount of time an idle connection will remain idle before closing itself.
+- `period`: specifies period between two cleanup ops, which closes some idle connections not used for a long time (*about 1 ~ 2 period*). It can't be less than 1 min in this version; otherwise, many CPU cycles are occupied by the cleanup task. I usually set it to 3 ~ 5 min, but if there exist too many resident connections in your program, this value should be larger.
 
 You can make some operations on this `Pool` instance after creating it successfully. If you don't use it anymore, please remember to close it. Invoking `Pool.Close` method can ensure that all resources related to the connection pool will be released.
 
