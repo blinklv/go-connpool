@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-01-10
+// Last Change: 2019-01-15
 
 // A concurrency-safe connection pool. It can be used to manage and reuse connections
 // based on the destination address of which. This design makes a pool work better with
@@ -236,8 +236,12 @@ type bucket struct {
 	sync.Mutex
 	size     int
 	capacity int
-	top      *element
 	closed   bool
+
+	// The top field records the stack top; the cut field records the successor
+	// of the element popped, which has the max depth between the two adjacent
+	// cleanup task.
+	top, cut *element
 
 	// The following fields are related to statistics, and the sync.Mutex doesn't
 	// protect them. So any operation on them should be atomic.
