@@ -427,7 +427,7 @@ func (b *bucket) _close() {
 // used in test now.
 func (b *bucket) _size() int {
 	size := 0
-	for top := b.top; top != nil; top = top.next {
+	for top := b.top; top.conn != nil; top = top.next {
 		size++
 	}
 	return size
