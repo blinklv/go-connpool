@@ -303,7 +303,7 @@ func (b *bucket) push(conn *Conn) (ok bool) {
 // When a connection is created, we should bind it to the specific bucket.
 func (b *bucket) bind(c net.Conn) *Conn {
 	atomic.AddInt64(&b.total, 1)
-	return &Conn{c, b, 0}
+	return &Conn{c, b}
 }
 
 func (b *bucket) cleanup(shutdown bool) int {
@@ -361,11 +361,6 @@ type Conn struct {
 
 	// The bucket to which this connection binds.
 	b *bucket
-
-	// Represents whether the current connection is active or idle. 0 means
-	// idle and 1 means active. This field is only meaningful to the correspond
-	// bucket. The connection itself doesn't access it.
-	state int32
 }
 
 // If there is enough room in the connection pool to place this connection,
