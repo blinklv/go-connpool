@@ -190,7 +190,7 @@ func (pool *Pool) selectBucket(address string) (b *bucket) {
 		// this address again. The outer statement 'if b == nil' can't guarantee
 		// the bucket doesn't exist at this point.
 		if b = pool.bs[address]; b == nil {
-			b = &bucket{capacity: pool.capacity, top: &element{}}
+			b = &bucket{capacity: pool.capacity, top: bottom}
 			pool.bs[address] = b
 		}
 		pool.rwlock.Unlock()
@@ -316,7 +316,7 @@ func (b *bucket) cleanup(shutdown bool) int {
 	if !shutdown && b.cut != nil {
 		cut, b.cut = *b.cut, nil
 	} else {
-		cut, b.top = *b.top, &element{}
+		cut, b.top = *b.top, bottom
 	}
 	b.size, b.depth = b.depth, 0
 	atomic.StoreInt64(&b.idle, int64(b.size))
@@ -341,11 +341,13 @@ func (b *bucket) _close() {
 // used in test now.
 func (b *bucket) _size() int {
 	size := 0
-	for top := b.top; top.conn != nil; top = top.next {
+	for top := b.top; top != bottom; top = top.next {
 		size++
 	}
 	return size
 }
+
+var bottom = &element{}
 
 // The basic element of the bucket.
 type element struct {
