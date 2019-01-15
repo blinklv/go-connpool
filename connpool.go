@@ -241,7 +241,8 @@ type bucket struct {
 
 	// The cut field records the successor of the element popped, which has
 	// the max depth between the two adjacent cleanup task; the depth field
-	// records the depth of the element which the cut field references.
+	// records the number of elements before (closer to the stack top) the
+	// element referenced by the cut field (it's 0 when the cut field is nil).
 	cut   *element
 	depth int
 
@@ -267,8 +268,11 @@ func (b *bucket) pop() (conn *Conn) {
 		// 2. The top element is equal to the element that the cut field references
 		//    to. Cause the top element will be returned immeidatelly, so the cut
 		//    field must move to the next one of which.
+		//
+		// NOTE: The cut field will reference to the top element after finishing
+		// this method, so we need to reset its depth to zero.
 		if b.top == b.cut || b.cut == nil {
-			b.cut = b.top.next
+			b.cut, b.depth = b.top.next, 0
 		}
 
 		conn, b.top = b.top.conn, b.top.next
@@ -283,32 +287,18 @@ func (b *bucket) pop() (conn *Conn) {
 	return
 }
 
-var (
-	bucketIsFull   = errors.New("bucket is full")
-	bucketIsClosed = errors.New("bucket is closed")
-)
-
-// push a connection to the bucket. If the bucket is full, returns bucketIsFull.
-// If the bucket is closed, returns bucketIsClosed.
-func (b *bucket) push(conn *Conn) (err error) {
+// push a connection to the bucket. If success, returns ture; otherwise,
+// returns false (bucket is full or closed).
+func (b *bucket) push(conn *Conn) (ok bool) {
 	b.Lock()
 	if !b.closed && b.size < b.capacity {
-		// When a connection is pushed to the bucket, we think it's used recently.
-		// So we set the state to 1 (active). This operation can't done in the pop
-		// method, because some connections are created directly instead of poping
-		// from the bucket.
-		conn.state = 1
-
-		// Adjust the top and the size.
 		b.top = &element{conn: conn, next: b.top}
+		// Not only the size of the entrie bucket will increase, but also the number
+		// of elements before the element referenced by the cut field will increase.
 		b.size++
+		b.depth++
 		atomic.AddInt64(&b.idle, 1)
-	} else if b.closed {
-		// In fact, the bucket is full and closed can happen simultaneously, but
-		// we think the closed state has higher priority.
-		err = bucketIsClosed
-	} else {
-		err = bucketIsFull
+		ok = true
 	}
 	b.Unlock()
 	return
@@ -457,7 +447,7 @@ type Conn struct {
 // If there is enough room in the connection pool to place this connection,
 // push it to the pool. Otherwise, release this connection directly.
 func (conn *Conn) Close() error {
-	if err := conn.b.push(conn); err != nil {
+	if !conn.b.push(conn) {
 		return conn.Release()
 	}
 	return nil
