@@ -259,6 +259,18 @@ type bucket struct {
 func (b *bucket) pop() (conn *Conn) {
 	b.Lock()
 	if b.size > 0 && !b.closed {
+		// There two cases we need to adjust the cut field to reference the
+		// next element of the top one:
+		//
+		// 1. The cut field is nil. Which means the pop method has never been called
+		//    since the last cleanup opeartion, so we need to initialize it.
+		// 2. The top element is equal to the element that the cut field references
+		//    to. Cause the top element will be returned immeidatelly, so the cut
+		//    field must move to the next one of which.
+		if b.top == b.cut || b.cut == nil {
+			b.cut = b.top.next
+		}
+
 		conn, b.top = b.top.conn, b.top.next
 		b.size--
 
