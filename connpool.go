@@ -237,11 +237,13 @@ type bucket struct {
 	size     int
 	capacity int
 	closed   bool
+	top      *element
 
-	// The top field records the stack top; the cut field records the successor
-	// of the element popped, which has the max depth between the two adjacent
-	// cleanup task.
-	top, cut *element
+	// The cut field records the successor of the element popped, which has
+	// the max depth between the two adjacent cleanup task; the depth field
+	// records the depth of the element which the cut field references.
+	cut   *element
+	depth int
 
 	// The following fields are related to statistics, and the sync.Mutex doesn't
 	// protect them. So any operation on them should be atomic.
