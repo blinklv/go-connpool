@@ -191,7 +191,7 @@ func (pool *Pool) selectBucket(address string) (b *bucket) {
 		// this address again. The outer statement 'if b == nil' can't guarantee
 		// the bucket doesn't exist at this point.
 		if b = pool.bs[address]; b == nil {
-			b = &bucket{capacity: pool.capacity}
+			b = &bucket{capacity: pool.capacity, top: &element{}}
 			pool.bs[address] = b
 		}
 		pool.rwlock.Unlock()
