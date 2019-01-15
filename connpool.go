@@ -11,7 +11,6 @@
 package connpool
 
 import (
-	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -268,11 +267,8 @@ func (b *bucket) pop() (conn *Conn) {
 		// 2. The top element is equal to the element that the cut field references
 		//    to. Cause the top element will be returned immeidatelly, so the cut
 		//    field must move to the next one of which.
-		//
-		// NOTE: The cut field will reference to the top element after finishing
-		// this method, so we need to reset its depth to zero.
 		if b.top == b.cut || b.cut == nil {
-			b.cut, b.depth = b.top.next, 0
+			b.cut = b.top.next
 		}
 
 		conn, b.top = b.top.conn, b.top.next
@@ -310,100 +306,28 @@ func (b *bucket) bind(c net.Conn) *Conn {
 	return &Conn{c, b, 0}
 }
 
-// Clean all idle connections in the bucket and return the number of connections cleaned
-// up in this process. This operation is more expensive than the pop and the push method
-// . The primary problem is this operation will make other methods (push, pop) temporary
-// unavailability when the list is too long. The current strategy is dividing this task
-// into a number of small parts; other methods have a chance to get the lock between two
-// subtasks.
-func (b *bucket) cleanup(shutdown bool) (unused int) {
-
-	for backup, inc := (*element)(nil), 0; ; {
-		backup, inc = b.iterate(backup, shutdown)
-		unused += inc
-		if backup == nil {
-			break
-		}
-
-		// NOTE: The interrupt field isn't empty only in test mode.
-		if b.interrupt != nil {
-			done := make(chan struct{})
-			b.interrupt <- done
-			<-done
-		}
-	}
-
-	if b.interrupt != nil {
-		// NOTE: The following statements only run in test mode. So no matter
-		// how complicated it is, it won't affect performance in normal cases.
-		close(b.interrupt)
-		b.interrupt = nil
-	}
-	return
-}
-
-// Wrap the _iterate method; lock it and initialize the backup parameter.
-func (b *bucket) iterate(backup *element, shutdown bool) (*element, int) {
-	b.Lock()
-	defer b.Unlock()
-
-	// The 'closed' field of a bucket will be set to true only when the Close
-	// method of the pool is invoked. The following assignment is placed in the
-	// bucket.cleanup method may be better from the view of semantics, but if we
-	// do that, we need some additional works (add lock) to protect it. However,
-	// these works can be omitted in this method.
-	b.closed = shutdown
-
-	if backup == nil {
-		if b.top == nil {
-			return nil, 0
-		}
-		backup, b.top, b.size = b.top, nil, 0
-		atomic.StoreInt64(&b.idle, 0)
-	}
-
-	return b._iterate(backup, shutdown)
-}
-
-// Iterate each connection in the bucket. If the connection's state is active,
-// reset it to idle and push it to the temporary bucket. Otherwise, skip it (of
-// course also release it) and descrease the original bucket's size.
-func (b *bucket) _iterate(backup *element, shutdown bool) (*element, int) {
-	// Invariant: the backup parameter isn't nil.
+func (b *bucket) cleanup(shutdown bool) int {
 	var (
-		top, tail, current *element
-		// 'unused' variable records the number of connections cleand up
-		// in this iteration.
-		i, unused int
+		cut    element
+		unused int
 	)
 
-	// We only handle the first 16 connections at once; this will prevent this
-	// loop costs so much time when the list is too long.
-	for i = 0; backup != nil && i < 16; i++ {
-		current, backup = backup, backup.next
-		if !shutdown && b.size < b.capacity && current.conn.state == 1 {
-			// 'tail' records the first active connection in this iteration. Becase we push
-			// active connections to the temporary bucket, which will reverse the elements
-			// order in the original bucket. The first active element will become the last
-			// element of the temporary bucket, so I named it 'tail'.
-			if top == nil {
-				tail = current
-			}
+	b.Lock()
+	if !shutdown && b.cut != nil {
+		cut, b.cut = *b.cut, nil
+	} else {
+		cut, b.top = *b.top, &element{}
+	}
+	b.size, b.depth = b.depth, 0
+	atomic.StoreInt64(&b.idle, int64(b.size))
+	b.Unlock()
 
-			current.conn.state = 0
-			top, current.next = current, top
-			b.size++
-			atomic.AddInt64(&b.idle, 1)
-		} else {
-			current.conn.Release()
-			unused++
-		}
+	for e := &cut; e.conn != nil; e = e.next {
+		e.conn.Release()
+		unused++
 	}
 
-	if top != nil {
-		b.top, tail.next = top, b.top
-	}
-	return backup, unused
+	return unused
 }
 
 // Set the bucket to the closed state; it's only used in test now.
