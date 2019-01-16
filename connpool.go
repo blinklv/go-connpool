@@ -80,6 +80,12 @@ func (b *bucket) pop() (conn *Conn) {
 	return
 }
 
+// A connection should be bound to the specific bucket when it's created.
+func (b *bucket) bind(conn net.Conn) *Conn {
+	atomic.AddInt64(&b.total, 1)
+	return &Conn{conn, b}
+}
+
 // The bottom variable represents the end of a linked list; it's a mark node
 // which tells you that you reach the end. The primary reason I don't use the
 // nil to represent the end is distinguishing it from the beginning.
