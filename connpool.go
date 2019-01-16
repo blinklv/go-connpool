@@ -9,7 +9,52 @@ package connpool
 
 import (
 	"net"
+	"sync"
 )
+
+// bucket is a collection of connections, the internal structure of which is
+// a linked list which implements some operations related to the stack.
+type bucket struct {
+	sync.Mutex
+	size     int
+	capacity int
+	closed   bool
+
+	// The head pointer of the linked list. I name it to 'top' cause I operate
+	// the linked list as a stack. It will reference the bottom variable when
+	// initialize.
+	top *element
+
+	// The cut field records the successor of the popped element which has
+	// the max depth between the two adjacent cleanup task; the depth field
+	// records the number of elements above the element referenced by the
+	// cut field (it's 0 when the cut field is nil).
+	cut   *element
+	depth int
+
+	// The following fields are related to statistics, and the sync.Mutex doesn't
+	// protect them. So any operation on them should be atomic.
+	total int64 // The total number of connections related to this bucket.
+	idle  int64 // The number of idle connections in the bucket.
+}
+
+// push a connection to the bucket. If success, returns; otherwise,
+// returns false when bucket is full or closed.
+func (b *bucket) push(conn *Conn) (ok bool) {
+	b.Lock()
+	if !b.closed && b.size < b.capacity {
+		b.top = &element{conn: conn, next: b.top}
+		b.size++
+		atomic.AddInt64(&b.idle, 1)
+
+		// Not only the size of the entrie bucket will increase, but also the number
+		// of elements above the element referenced by the cut field will increase.
+		b.depth++
+		ok = true
+	}
+	b.Unlock()
+	return
+}
 
 // The bottom variable represents the end of a linked list; it's a mark node
 // which tells you that you reach the end. The primary reason I don't use the
