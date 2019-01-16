@@ -3,13 +3,25 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-01-15
+// Last Change: 2019-01-16
 
 package connpool
 
 import (
 	"net"
 )
+
+// The bottom variable represents the end of a linked list; it's a mark node
+// which tells you that you reach the end. The primary reason I don't use the
+// nil to represent the end is distinguishing it from the beginning.
+var bottom = &element{}
+
+// The basic element of the bucket type. Multiple elements are organized
+// in linked list form.
+type element struct {
+	conn *Conn
+	next *element
+}
 
 // An implementation of the net.Conn interface. It wraps the raw connection
 // created by the dial function you register to rewrite the original Close
