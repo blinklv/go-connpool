@@ -56,6 +56,30 @@ func (b *bucket) push(conn *Conn) (ok bool) {
 	return
 }
 
+// pop a connection from the bucket. If the bucket is empty or closed, returns nil.
+func (b *bucket) pop() (conn *Conn) {
+	b.Lock()
+	if !b.closed && b.size > 0 {
+		// There two cases we need to adjust the cut field to reference the
+		// successor of the top one:
+		//
+		// 1. The cut field is nil. Which means the pop method has never been called
+		//    since the last cleanup operation.
+		// 2. The top element is equal to the element referenced by the cut field.
+		//    Cause the top element will be returned immediately, so the cut field
+		//    must move to the successor of which.
+		if b.top == b.cut || b.cut == nil {
+			b.cut = b.top.next
+		}
+
+		conn, b.top = b.top.conn, b.top.next
+		b.size--
+		atomic.AddInt64(&b.idle, -1)
+	}
+	b.Unlock()
+	return
+}
+
 // The bottom variable represents the end of a linked list; it's a mark node
 // which tells you that you reach the end. The primary reason I don't use the
 // nil to represent the end is distinguishing it from the beginning.
