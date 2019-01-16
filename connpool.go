@@ -21,7 +21,7 @@ type bucket struct {
 	closed   bool
 
 	// The head pointer of the linked list. I name it to 'top' cause I operate
-	// the linked list as a stack. It will reference the bottom variable when
+	// the linked list as a stack. It will reference an empty element when
 	// initialize.
 	top *element
 
@@ -86,10 +86,39 @@ func (b *bucket) bind(conn net.Conn) *Conn {
 	return &Conn{conn, b}
 }
 
-// The bottom variable represents the end of a linked list; it's a mark node
-// which tells you that you reach the end. The primary reason I don't use the
-// nil to represent the end is distinguishing it from the beginning.
-var bottom = &element{}
+// Cleans up the idle connections of the bucket and returns the number of closed
+// connections. If the shutdown parameter is false, only releases rencently not
+// used connections; otherwise, releases all.
+func (b *bucket) cleanup(shutdown bool) (unused int) {
+	var cut element
+
+	b.Lock()
+	b.closed = shutdown
+
+	// I use an empty element to represent the end of a linked list; it's a mark
+	// node which tells you that you reach the end. The primary reason I don't use
+	// the nil to represent the end is distinguishing it from the beginning.
+	if !shutdown && b.cut != nil {
+		cut, *b.cut = *b.cut, element{}
+	} else {
+		cut, b.top = *b.top, &element{}
+	}
+
+	// The element referenced by the cut field and elements below it will be
+	// released, so the number of remaining connections is equal to the depth
+	// of the last cycle. We also need to reset the cut field and the depth
+	// field to nil and zero respectively to prepare for the next cycle.
+	b.size, b.cut, b.depth = b.depth, nil, 0
+	atomic.StoreInt64(&b.idle, int64(b.size))
+	b.Unlock()
+
+	for e := &cut; e.conn != nil; e.next {
+		e.conn.Release()
+		unused++
+	}
+
+	return
+}
 
 // The basic element of the bucket type. Multiple elements are organized
 // in linked list form.
