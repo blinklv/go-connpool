@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-01-16
+// Last Change: 2019-01-17
 
 package connpool
 
@@ -118,6 +118,13 @@ func (b *bucket) cleanup(shutdown bool) (unused int) {
 	}
 
 	return
+}
+
+// Set the bucket to the closed state; it's only used in test now.
+func (b *bucket) _close() {
+	b.Lock()
+	b.closed = true
+	b.Unlock()
 }
 
 // The basic element of the bucket type. Multiple elements are organized
