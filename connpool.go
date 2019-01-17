@@ -83,6 +83,27 @@ func New(dial Dial, capacity int, period time.Duration) (*Pool, error) {
 	return pool, nil
 }
 
+// Get a connection from the pool, the destination address of which is equal to
+// the address parameter. If an error happens, the connection returned is nil.
+func (pool *Pool) Get(address string) (net.Conn, error) {
+	// First, get a connection bucket.
+	b := pool.selectBucket(address)
+
+	// Second, get a connection from the bucket.
+	conn := b.pop()
+	if conn == nil {
+		// If there is no idle connection in the bucket, we need to invoke the
+		// dial function to create a new connection and bind it to the bucket.
+		if c, err := pool.dial(address); err == nil {
+			conn = b.bind(c)
+		} else {
+			return nil, err
+		}
+	}
+
+	return conn, nil
+}
+
 // bucket is a collection of connections, the internal structure of which is
 // a linked list which implements some operations related to the stack.
 type bucket struct {
