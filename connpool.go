@@ -33,7 +33,7 @@ type Dial func(address string) (net.Conn, error)
 // If a connection has never been used for a long time (mark it as idle), it
 // will be released.
 type Pool struct {
-	rwlock   sycn.RWMutex
+	rwlock   sync.RWMutex
 	dial     Dial
 	capacity int
 	period   time.Duration
@@ -139,6 +139,36 @@ func (pool *Pool) selectBucket(address string) (b *bucket) {
 		pool.rwlock.Unlock()
 	}
 	return
+}
+
+// cleanup idle connections periodically.
+func (pool *Pool) cleanup() {
+	var timer = time.NewTimer(pool.period)
+	for {
+		select {
+		case <-timer.C:
+			pool.rwlock.RLock()
+			var buckets = make([]*bucket, 0, len(pool.buckets))
+			// If we invokes the bucket.cleanup method in this for-loop, which
+			// will cause the Get or the New method waiting for too long when
+			// creates a new bucket.
+			for _, b := range pool.buckets {
+				buckets = append(buckets, b)
+			}
+			pool.rwlock.RUnlock()
+
+			for _, b := range buckets {
+				b.cleanup(false)
+			}
+			timer.Reset(pool.period)
+		case done := <-pool.exit:
+			timer.Stop()
+			for _, b := range pool.buckets {
+				b.cleanup(true)
+			}
+			close(done)
+		}
+	}
 }
 
 // bucket is a collection of connections, the internal structure of which is
