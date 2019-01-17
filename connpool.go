@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -120,6 +121,54 @@ func (pool *Pool) Close() error {
 	pool.exit <- done
 	<-done
 	return nil
+}
+
+// Pool's statistical data. You can get it from Pool.Stats method.
+type Stats struct {
+	// Timestamp identifies when this statistical was generated. It equals
+	// to the number of seconds elapsed since January 1, 1970 UTC.
+	Timestamp int64 `json:"timestamp"`
+
+	// Destinations collects all destination statistical data related to the pool.
+	Destinations []DestinationStats `json:"destinations"`
+}
+
+// Destination's statistical data.
+type DestinationStats struct {
+	// Address identifies a destination, the format of which usually likes
+	// ip:port. In fact, you can not be confined to this format and specify
+	// any only and meaningful value to it.
+	Address string `json:"address"`
+
+	// The total number of connections related to this destination, which
+	// contains the number of active connections and idle connections.
+	Total int64 `json:"total"`
+
+	// The number of idle connections related to this destination.
+	Idle int64 `json:"idle"`
+}
+
+// Get a statistical data of the Pool.
+func (pool *Pool) Stats() *Stats {
+	stats := &Stats{
+		Timestamp: time.Now().Unix(),
+	}
+
+	pool.rwlock.RLock()
+	defer pool.rwlock.RUnlock()
+
+	stats.Destinations = make([]DestinationStats, 0, len(pool.buckets))
+	for address, b := range pool.buckets {
+		// We needn't add the lock to protect the total and the idle field of a
+		// bucket; any operation on them is atomic.
+		stats.Destinations = append(stats.Destinations, DestinationStats{
+			Address: address,
+			Total:   atomic.LoadInt64(&b.total),
+			Idle:    atomic.LoadInt64(&b.idle),
+		})
+	}
+
+	return stats
 }
 
 // select a bucket for the address. If it doesn't exist, create a new one; which
