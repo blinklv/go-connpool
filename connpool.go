@@ -27,6 +27,18 @@ import (
 // of connections into different pools won't be harder for users and more efficient.
 type Dial func(address string) (net.Conn, error)
 
+// Pool is a connection pool. It will cache some connections for each address.
+// If a connection has never been used for a long time (mark it as idle), it
+// will be released.
+type Pool struct {
+	rwlock   sycn.RWMutex
+	dial     Dial
+	capacity int
+	period   time.Duration
+	buckets  map[string]*bucket
+	exit     chan chan struct{}
+}
+
 // bucket is a collection of connections, the internal structure of which is
 // a linked list which implements some operations related to the stack.
 type bucket struct {
