@@ -113,6 +113,15 @@ func (pool *Pool) New(address string) (net.Conn, error) {
 	return nil, err
 }
 
+// Close the connection pool. It will release all idle connections in the pool.
+// You shouldn't use this pool anymore after this method has been called.
+func (pool *Pool) Close() error {
+	done := make(chan struct{})
+	pool.exit <- done
+	<-done
+	return nil
+}
+
 // select a bucket for the address. If it doesn't exist, create a new one; which
 // means the return value of this function can't be nil.
 func (pool *Pool) selectBucket(address string) (b *bucket) {
