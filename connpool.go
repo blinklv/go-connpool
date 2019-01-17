@@ -127,6 +127,16 @@ func (b *bucket) _close() {
 	b.Unlock()
 }
 
+// Iterating all elements in the bucket to compute its size; it's only
+// used in test now.
+func (b *bucket) _size() int {
+	size := 0
+	for e := b.top; e.conn != nil; e = e.next {
+		size++
+	}
+	return size
+}
+
 // The basic element of the bucket type. Multiple elements are organized
 // in linked list form.
 type element struct {
