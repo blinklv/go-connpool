@@ -156,27 +156,30 @@ func (pool *Pool) cleanup() {
 	for {
 		select {
 		case <-timer.C:
-			pool.rwlock.RLock()
-			var buckets = make([]*bucket, 0, len(pool.buckets))
-			// If we invokes the bucket.cleanup method in this for-loop, which
-			// will cause the Get or the New method waiting for too long when
-			// creates a new bucket.
-			for _, b := range pool.buckets {
-				buckets = append(buckets, b)
-			}
-			pool.rwlock.RUnlock()
-
-			for _, b := range buckets {
-				b.cleanup(false)
-			}
+			pool._cleanup(false)
 			timer.Reset(pool.period)
 		case done := <-pool.exit:
 			timer.Stop()
-			for _, b := range pool.buckets {
-				b.cleanup(true)
-			}
+			pool._cleanup(true)
 			close(done)
 		}
+	}
+}
+
+// cleanup idle connections.
+func (pool *Pool) _cleanup(shutdown bool) {
+	pool.rwlock.RLock()
+	var buckets = make([]*bucket, 0, len(pool.buckets))
+	// If we invokes the bucket.cleanup method in this for-loop, which
+	// will cause the Get or the New method waiting for too long when
+	// creates a new bucket.
+	for _, b := range pool.buckets {
+		buckets = append(buckets, b)
+	}
+	pool.rwlock.RUnlock()
+
+	for _, b := range buckets {
+		b.cleanup(shutdown)
 	}
 }
 
