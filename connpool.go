@@ -11,8 +11,10 @@
 package connpool
 
 import (
+	"fmt"
 	"net"
 	"sync"
+	"time"
 )
 
 // This type defines how to connect to the address. The purpose of designing this
@@ -37,6 +39,48 @@ type Pool struct {
 	period   time.Duration
 	buckets  map[string]*bucket
 	exit     chan chan struct{}
+}
+
+// Create a connection pool. The dial parameter defines how to create a new
+// connection. You can't directly use the raw net.Dial function, but I think
+// wrapping it on the named network (tcp, udp and unix etc) is easy, as follows:
+//
+//  func(address string) (net.Conn, error) {
+//      return net.Dial("tcp", address)
+//  }
+//
+// The capacity parameter controls the maximum idle connections to keep per-host
+// (not all hosts). The period parameter specifies period between two cleanup ops,
+// which closes some idle connections not used for a long time (about 1~2 period).
+// It can't be less than 1 min in this version; otherwise, many CPU cycles are
+// occupied by the cleanup task. I usually set it to 3 ~ 5 min, but if there exist
+// too many resident connections in your program, this value should be larger.
+func New(dial Dial, capacity int, period time.Duration) (*Pool, error) {
+	if dial == nil {
+		return nil, fmt.Errorf("dial can't be nil")
+	}
+
+	if capacity < 0 {
+		return nil, fmt.Errorf("capacity (%d) can't be less than zero", capacity)
+	}
+
+	if period < time.Minute {
+		return nil, fmt.Errorf("cleanup period (%s) can't be less than 1 min", period)
+	}
+
+	pool := &Pool{
+		dial:     dial,
+		capacity: capacity,
+		period:   period,
+		buckets:  make(map[string]*bucket),
+		exit:     make(chan chan struct{}),
+	}
+
+	// The cleanup method runs in a new goroutine. In fact, the primary reason
+	// of designing the Closed method is stopping it to prevent resource leak.
+	go pool.cleanup()
+
+	return pool, nil
 }
 
 // bucket is a collection of connections, the internal structure of which is
