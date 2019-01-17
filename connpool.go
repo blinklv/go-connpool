@@ -110,8 +110,9 @@ func (pool *Pool) Get(address string) (net.Conn, error) {
 func (pool *Pool) New(address string) (net.Conn, error) {
 	if c, err := pool.dial(address); err == nil {
 		return pool.selectBucket(address).bind(c), nil
+	} else {
+		return nil, err
 	}
-	return nil, err
 }
 
 // Close the connection pool. It will release all idle connections in the pool.
