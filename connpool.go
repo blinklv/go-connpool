@@ -112,7 +112,7 @@ func (b *bucket) cleanup(shutdown bool) (unused int) {
 	atomic.StoreInt64(&b.idle, int64(b.size))
 	b.Unlock()
 
-	for e := &cut; e.conn != nil; e.next {
+	for e := &cut; e.conn != nil; e = e.next {
 		e.conn.Release()
 		unused++
 	}
