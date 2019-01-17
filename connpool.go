@@ -34,7 +34,7 @@ type Dial func(address string) (net.Conn, error)
 // If a connection has never been used for a long time (mark it as idle), it
 // will be released.
 type Pool struct {
-	rwlock   sync.RWMutex
+	rw       sync.RWMutex
 	dial     Dial
 	capacity int
 	period   time.Duration
@@ -155,8 +155,8 @@ func (pool *Pool) Stats() *Stats {
 		Timestamp: time.Now().Unix(),
 	}
 
-	pool.rwlock.RLock()
-	defer pool.rwlock.RUnlock()
+	pool.rw.RLock()
+	defer pool.rw.RUnlock()
 
 	stats.Destinations = make([]DestinationStats, 0, len(pool.buckets))
 	for address, b := range pool.buckets {
@@ -176,15 +176,15 @@ func (pool *Pool) Stats() *Stats {
 // means the return value of this function can't be nil.
 func (pool *Pool) selectBucket(address string) (b *bucket) {
 	// At first, get a bucket from the buckets.
-	pool.rwlock.RLock()
+	pool.rw.RLock()
 	b = pool.buckets[address]
-	pool.rwlock.RUnlock()
+	pool.rw.RUnlock()
 
 	// This conditional statement can save much time in most cases. Because the bucket
 	// for the address has already existed in normal case; otherwise, we have to add
 	// write-lock every time.
 	if b == nil {
-		pool.rwlock.Lock()
+		pool.rw.Lock()
 		// If the bucket for this address doesn't exist, we need to create a
 		// new one and add it to the bucket map.
 		//
@@ -195,7 +195,7 @@ func (pool *Pool) selectBucket(address string) (b *bucket) {
 			b = &bucket{capacity: pool.capacity, top: &element{}}
 			pool.buckets[address] = b
 		}
-		pool.rwlock.Unlock()
+		pool.rw.Unlock()
 	}
 	return
 }
@@ -218,7 +218,7 @@ func (pool *Pool) cleanup() {
 
 // cleanup idle connections.
 func (pool *Pool) _cleanup(shutdown bool) {
-	pool.rwlock.RLock()
+	pool.rw.RLock()
 	var buckets = make([]*bucket, 0, len(pool.buckets))
 	// If we invokes the bucket.cleanup method in this for-loop, which
 	// will cause the Get or the New method waiting for too long when
@@ -226,7 +226,7 @@ func (pool *Pool) _cleanup(shutdown bool) {
 	for _, b := range pool.buckets {
 		buckets = append(buckets, b)
 	}
-	pool.rwlock.RUnlock()
+	pool.rw.RUnlock()
 
 	for _, b := range buckets {
 		b.cleanup(shutdown)
