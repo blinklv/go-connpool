@@ -104,6 +104,15 @@ func (pool *Pool) Get(address string) (net.Conn, error) {
 	return conn, nil
 }
 
+// Create a new connection by using the underlying dial function you register
+// and bind it to the specific bucket.
+func (pool *Pool) New(address string) (net.Conn, error) {
+	if c, err := pool.dial(address); err == nil {
+		return pool.selectBucket(address).bind(c), nil
+	}
+	return nil, err
+}
+
 // bucket is a collection of connections, the internal structure of which is
 // a linked list which implements some operations related to the stack.
 type bucket struct {
