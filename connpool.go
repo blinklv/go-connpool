@@ -12,6 +12,18 @@ import (
 	"sync"
 )
 
+// This type defines how to connect to the address. The purpose of designing this
+// type is to serve the Pool struct. It's not as common as net.Dial that you can
+// specify a network type, which means the type of connections in one pool should
+// be same. In fact, I don't think caching different kinds of connections in the
+// same pool is a good idea, although they all satisfy the net.Conn interface. All
+// network types defined in https://golang.org/pkg/net/#Dial are not completely
+// independent, like tcp4, tcp6 and tcp, the latter includes the former two. There
+// will be some extra works to detect network types passed by callers when users
+// get connections from a pool, which sacrifices performance. Dividing various kinds
+// of connections into different pools won't be harder for users and more efficient.
+type Dial func(address string) (net.Conn, error)
+
 // bucket is a collection of connections, the internal structure of which is
 // a linked list which implements some operations related to the stack.
 type bucket struct {
