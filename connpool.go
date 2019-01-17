@@ -40,6 +40,7 @@ type Pool struct {
 	period   time.Duration
 	buckets  map[string]*bucket
 	exit     chan chan struct{}
+	closed   bool
 }
 
 // Create a connection pool. The dial parameter defines how to create a new
@@ -117,11 +118,28 @@ func (pool *Pool) New(address string) (net.Conn, error) {
 
 // Close the connection pool. It will release all idle connections in the pool.
 // You shouldn't use this pool anymore after this method has been called.
-func (pool *Pool) Close() error {
-	done := make(chan struct{})
-	pool.exit <- done
-	<-done
-	return nil
+func (pool *Pool) Close() (err error) {
+	pool.rw.Lock()
+	if !pool.closed {
+		pool.closed = true
+	} else {
+		err = fmt.Errorf("connection pool is already closed")
+	}
+
+	// Although there is no code to acquire the lock explicitly after the following
+	// statement, the cleanup task will be triggered to do it implicitly. So the
+	// lock must be released at this point to avoid deadlock.
+	pool.rw.Unlock()
+
+	if err == nil {
+		// I must guarantee the following statements are only executed once; otherwise,
+		// it will be blocked forever at the second time (3re, 4th, ...) cause there is
+		// no reader of the pool.exit channel.
+		done := make(chan struct{})
+		pool.exit <- done
+		<-done
+	}
+	return
 }
 
 // Pool's statistical data. You can get it from Pool.Stats method.
@@ -192,7 +210,7 @@ func (pool *Pool) selectBucket(address string) (b *bucket) {
 		// this address again. The outer statement 'if b == nil' can't guarantee
 		// the bucket doesn't exist at this point.
 		if b = pool.buckets[address]; b == nil {
-			b = &bucket{capacity: pool.capacity, top: &element{}}
+			b = &bucket{capacity: pool.capacity, closed: pool.closed, top: &element{}}
 			pool.buckets[address] = b
 		}
 		pool.rw.Unlock()
