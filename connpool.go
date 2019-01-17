@@ -5,6 +5,9 @@
 // Maintainer: blinklv <blinklv@icloud.com>
 // Last Change: 2019-01-17
 
+// A concurrency-safe connection pool. It can be used to manage and reuse connections
+// based on the destination address of which. This design makes a pool work better with
+// some name servers.
 package connpool
 
 import (
