@@ -113,6 +113,34 @@ func (pool *Pool) New(address string) (net.Conn, error) {
 	return nil, err
 }
 
+// select a bucket for the address. If it doesn't exist, create a new one; which
+// means the return value of this function can't be nil.
+func (pool *Pool) selectBucket(address string) (b *bucket) {
+	// At first, get a bucket from the buckets.
+	pool.rwlock.RLock()
+	b = pool.buckets[address]
+	pool.rwlock.RUnlock()
+
+	// This conditional statement can save much time in most cases. Because the bucket
+	// for the address has already existed in normal case; otherwise, we have to add
+	// write-lock every time.
+	if b == nil {
+		pool.rwlock.Lock()
+		// If the bucket for this address doesn't exist, we need to create a
+		// new one and add it to the bucket map.
+		//
+		// NOTE: We need to check whether there has already existed a bucket for
+		// this address again. The outer statement 'if b == nil' can't guarantee
+		// the bucket doesn't exist at this point.
+		if b = pool.buckets[address]; b == nil {
+			b = &bucket{capacity: pool.capacity, top: &element{}}
+			pool.buckets[address] = b
+		}
+		pool.rwlock.Unlock()
+	}
+	return
+}
+
 // bucket is a collection of connections, the internal structure of which is
 // a linked list which implements some operations related to the stack.
 type bucket struct {
