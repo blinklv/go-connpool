@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-01-17
+// Last Change: 2019-01-18
 
 // A concurrency-safe connection pool. It can be used to manage and reuse connections
 // based on the destination address of which. This design makes a pool work better with
@@ -286,9 +286,11 @@ func (b *bucket) push(conn *Conn) (ok bool) {
 		b.size++
 		atomic.AddInt64(&b.idle, 1)
 
-		// Not only the size of the entrie bucket will increase, but also the number
-		// of elements above the element referenced by the cut field will increase.
-		b.depth++
+		if b.cut != nil {
+			// If the cut field is already initialized, the number of elements above
+			// the element referenced by which will increase.
+			b.depth++
+		}
 		ok = true
 	}
 	b.Unlock()
