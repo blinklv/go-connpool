@@ -19,6 +19,7 @@ import (
 
 func TestBucket(t *testing.T) {
 	t.Run("bucket.push", testBucketPush)
+	t.Run("(closed) bucket.push", testClosedBucketPush)
 }
 
 func testBucketPush(t *testing.T) {
@@ -57,7 +58,47 @@ func testBucketPush(t *testing.T) {
 		assert.Equalf(e.b.total, succ, "%s bucket.total:%d != succ:%d", env, e.b.total, succ)
 		assert.Equalf(e.b.idle, succ, "%s bucket.idle:%d != succ:%d", env, e.b.idle, succ)
 		assert.Equalf(e.b.depth, 0, "%s bucket.depth:%d != 0", env, e.b.depth)
-		assert.Equalf(e.b.cut, (*element)(nil), "%s bucket.cut:%v != nil", env, e.b.cut)
+		assert.Equalf((*element)(nil), e.b.cut, "%s bucket.cut:%v != nil", env, e.b.cut)
+	}
+}
+
+func testClosedBucketPush(t *testing.T) {
+	for _, e := range []struct {
+		b *bucket
+		n int
+	}{
+		{b: &bucket{capacity: 0, top: &element{}, closed: true}, n: 10000},
+		{b: &bucket{capacity: 1, top: &element{}, closed: true}, n: 10000},
+		{b: &bucket{capacity: 2048, top: &element{}, closed: true}, n: 10000},
+		{b: &bucket{capacity: 4096, top: &element{}, closed: true}, n: 10000},
+		{b: &bucket{capacity: 8192, top: &element{}, closed: true}, n: 10000},
+	} {
+		var (
+			d          = &dialer{}
+			succ, fail int64
+		)
+
+		execute(16, e.n, func() {
+			conn, _ := d.dial("192.168.1.1:80")
+			c := e.b.bind(conn)
+			if e.b.push(c) {
+				atomic.AddInt64(&succ, 1)
+			} else {
+				atomic.AddInt64(&fail, 1)
+				c.Close()
+			}
+		})
+
+		assert, env := assert.New(t), sprintf("[capacity:%d number:%d closed:true]", e.b.capacity, e.n)
+		assert.Equalf(e.n, int(succ+fail), "%s total:%d != succ:%d + fail:%d", env, e.n, succ, fail)
+		assert.Equalf(0, int(succ), "%s 0 != succ:%d", env, succ)
+		assert.Equalf(e.n, int(fail), "%s number:%d != fail:%d", env, e.n, fail)
+		assert.Equalf(0, e.b.size, "%s bucket.size:%d != 0", env, e.b.size)
+		assert.Equalf(0, e.b._size(), "%s bucket._size:%d != 0", env, e.b._size())
+		assert.Equalf(0, int(e.b.total), "%s bucket.total:%d != 0", env, e.b.total)
+		assert.Equalf(0, int(e.b.idle), "%s bucket.idle:%d != 0", env, e.b.idle)
+		assert.Equalf(0, e.b.depth, "%s bucket.depth:%d != 0", env, e.b.depth)
+		assert.Equalf((*element)(nil), e.b.cut, "%s bucket.cut:%v != nil", env, e.b.cut)
 	}
 }
 
