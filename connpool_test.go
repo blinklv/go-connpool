@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2019-01-18
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-01-18
+// Last Change: 2019-01-21
 
 package connpool
 
@@ -20,6 +20,7 @@ import (
 func TestBucket(t *testing.T) {
 	t.Run("bucket.push", testBucketPush)
 	t.Run("(closed) bucket.push", testClosedBucketPush)
+	t.Run("bucket.pop", testBucketPop)
 }
 
 func testBucketPush(t *testing.T) {
@@ -102,10 +103,69 @@ func testClosedBucketPush(t *testing.T) {
 	}
 }
 
+func testBucketPop(t *testing.T) {
+	for _, e := range []struct {
+		b *bucket
+		n int
+	}{
+		{b: &bucket{capacity: 0, top: &element{}}, n: 4096},
+		{b: &bucket{capacity: 1, top: &element{}}, n: 4096},
+		{b: &bucket{capacity: 2048, top: &element{}}, n: 4096},
+		{b: &bucket{capacity: 4096, top: &element{}}, n: 4096},
+		{b: &bucket{capacity: 8192, top: &element{}}, n: 4096},
+	} {
+		var (
+			d          = &dialer{}
+			succ, fail int64
+		)
+
+		for i := 0; i < e.b.capacity; i++ {
+			conn, _ := d.dial("192.168.1.1:80")
+			e.b.push(e.b.bind(conn))
+		}
+
+		execute(16, e.n, func() {
+			if e.b.pop() != nil {
+				atomic.AddInt64(&succ, 1)
+			} else {
+				atomic.AddInt64(&fail, 1)
+			}
+		})
+
+		assert, env := assert.New(t), sprintf("[capacity:%d number:%d]", e.b.capacity, e.n)
+		assert.Equalf(e.n, int(succ+fail), "%s total:%d != succ:%d + fail:%d", env, e.n, succ, fail)
+		assert.Equalf(min(e.b.capacity, e.n), int(succ), "%s min(capacity:%d, number:%d) != succ:%d", env, e.b.capacity, e.n, succ)
+		assert.Equalf(max(e.n-e.b.capacity, 0), int(fail), "%s max(number:%d - capacity:%d, 0) != fail:%d", env, e.n, e.b.capacity, fail)
+		assert.Equalf(max(e.b.capacity-e.n, 0), e.b.size, "%s max(capacity:%d - number:%d, 0), bucket.size:%d", env, e.b.capacity, e.n, e.b.size)
+		assert.Equalf(e.b.size, e.b._size(), "%s bucket.size:%d != bucket._size:%d", env, e.b.size, e.b._size())
+		assert.Equalf(e.b.size, int(e.b.idle), "%s bucket.size:%d != bucket.idle:%d", env, e.b.size, e.b.idle)
+		assert.Equalf(0, e.b.depth, "%s bucket.depth:%d != 0", env, e.b.depth)
+
+		if e.b.size == 0 {
+			assert.Equalf(element{}, *(e.b.top), "%s bucket.top:%v is not empty", env, e.b.top)
+		}
+
+		if e.b.capacity != 0 {
+			assert.Equalf(e.b.top, e.b.cut, "%s bucket.cut:%v != bucket.top:%v", env, e.b.cut, e.b.top)
+		}
+
+		succ = 0
+		execute(16, e.b.capacity, func() {
+			conn, _ := d.dial("192.168.1.1:80")
+			if e.b.push(e.b.bind(conn)) {
+				atomic.AddInt64(&succ, 1)
+			}
+		})
+
+		assert.Equalf(e.b.capacity, e.b.size, "%s bucket.size:%d != bucket.capacity:%d", env, e.b.capacity, e.b.size)
+		assert.Equalf(int(succ), e.b.depth, "%s bucket.depth:%d != bucket.size:%d", env, e.b.depth, e.b.size)
+	}
+}
+
 // Executing a callback function n times in multiple goroutines simultaneously.
 func execute(parallel, n int, cb func()) {
 	var wg = &sync.WaitGroup{}
-	for pn := n / parallel; n > 0; n -= pn {
+	for pn := max(n/parallel, 1); n > 0; n -= pn {
 		m := min(pn, n)
 		wg.Add(1)
 		go func(m int) {
