@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-01-18
+// Last Change: 2019-01-28
 
 // A concurrency-safe connection pool. It can be used to manage and reuse connections
 // based on the destination address of which. This design makes a pool work better with
@@ -311,6 +311,10 @@ func (b *bucket) pop() (conn *Conn) {
 		//    must move to the successor of which.
 		if b.top == b.cut || b.cut == nil {
 			b.cut = b.top.next
+		}
+
+		if b.depth > 0 {
+			b.depth--
 		}
 
 		conn, b.top = b.top.conn, b.top.next
