@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2019-01-18
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-01-22
+// Last Change: 2019-01-30
 
 package connpool
 
@@ -22,6 +22,7 @@ func TestBucket(t *testing.T) {
 	t.Run("(closed) bucket.push", testClosedBucketPush)
 	t.Run("bucket.pop", testBucketPop)
 	t.Run("(closed) bucket.pop", testClosedBucketPop)
+	t.Run("(bucket.push/pop", testBucketPushAndPop)
 }
 
 func testBucketPush(t *testing.T) {
@@ -47,7 +48,7 @@ func testBucketPush(t *testing.T) {
 				atomic.AddInt64(&succ, 1)
 			} else {
 				atomic.AddInt64(&fail, 1)
-				c.Close()
+				c.Release()
 			}
 		})
 
@@ -87,7 +88,7 @@ func testClosedBucketPush(t *testing.T) {
 				atomic.AddInt64(&succ, 1)
 			} else {
 				atomic.AddInt64(&fail, 1)
-				c.Close()
+				c.Release()
 			}
 		})
 
@@ -201,6 +202,74 @@ func testClosedBucketPop(t *testing.T) {
 		assert.Equalf(e.b.size, int(e.b.idle), "%s bucket.size:%d != bucket._idle:%d", env, e.b.size, e.b.idle)
 		assert.Equalf(0, e.b.depth, "%s bucket.depth:%d is not zero", env, e.b.depth)
 		assert.Equalf((*element)(nil), e.b.cut, "%s bucket.cut:%v is not nil", env, e.b.cut)
+	}
+}
+
+func testBucketPushAndPop(t *testing.T) {
+	for _, e := range []struct {
+		b     *bucket
+		pushn int
+		popn  int
+	}{
+		{b: &bucket{capacity: 0, top: &element{}}, pushn: 4096, popn: 4096},
+		{b: &bucket{capacity: 1, top: &element{}}, pushn: 4096, popn: 4096},
+		{b: &bucket{capacity: 2048, top: &element{}}, pushn: 4096, popn: 4096},
+		{b: &bucket{capacity: 4096, top: &element{}}, pushn: 4096, popn: 4096},
+		{b: &bucket{capacity: 4096, top: &element{}}, pushn: 8192, popn: 4096},
+		{b: &bucket{capacity: 4096, top: &element{}}, pushn: 4096, popn: 8192},
+		{b: &bucket{capacity: 8192, top: &element{}}, pushn: 4096, popn: 4096},
+		{b: &bucket{capacity: 8192, top: &element{}}, pushn: 4096, popn: 8192},
+		{b: &bucket{capacity: 8192, top: &element{}}, pushn: 100000, popn: 100000},
+	} {
+		var (
+			d                  = &dialer{}
+			wg                 sync.WaitGroup
+			pushSucc, pushFail int64
+			popSucc, popFail   int64
+		)
+
+		wg.Add(1)
+		go func() {
+			execute(16, e.pushn, func() {
+				conn, _ := d.dial("192.168.1.1:80")
+				c := e.b.bind(conn)
+				if e.b.push(c) {
+					atomic.AddInt64(&pushSucc, 1)
+				} else {
+					atomic.AddInt64(&pushFail, 1)
+					c.Release()
+				}
+			})
+			wg.Done()
+		}()
+
+		wg.Add(1)
+		go func() {
+			execute(16, e.popn, func() {
+				if c := e.b.pop(); c != nil {
+					atomic.AddInt64(&popSucc, 1)
+				} else {
+					atomic.AddInt64(&popFail, 1)
+				}
+			})
+			wg.Done()
+		}()
+		wg.Wait()
+
+		t.Logf("push (succ:%d/fail:%d) pop (succ:%d/fail:%d) bucket.size:%d bucket.depth:%d", pushSucc, pushFail, popSucc, popFail, e.b.size, e.b.depth)
+
+		assert, env := assert.New(t), sprintf("[capacity:%d push-number:%d pop-number:%d]", e.b.capacity, e.pushn, e.popn)
+		assert.Equalf(e.pushn, int(pushSucc+pushFail), "%s push-number:%d != push-succ:%d + push-fail:%d", env, e.pushn, pushSucc, pushFail)
+		assert.Equalf(e.popn, int(popSucc+popFail), "%s pop-number:%d != pop-succ:%d + pop-fail:%d", env, e.popn, popSucc, popFail)
+		assert.Equalf(max(int(pushSucc-popSucc), 0), e.b.size, "%s max(push-succ:%d - pop-succ:%d, 0) != bucket.size:%d", env, pushSucc, popSucc, e.b.size)
+		assert.Equalf(e.b.size, e.b._size(), "%s bucket.size:%d != bucket._size:%d", env, e.b.size, e.b._size())
+		assert.Equalf(e.b.size, int(e.b.idle), "%s bucket.size:%d != bucket.idle:%d", env, e.b.size, e.b.idle)
+
+		if e.b.depth != 0 && e.b.depth == e.b.size {
+			assert.NotEqualf((*element)(nil), e.b.cut, "%s bucket.cut:%v is nil", env, e.b.cut)
+			assert.Equalf((*Conn)(nil), e.b.cut.conn, "%s bucket.cut.conn:%v != nil", env, e.b.cut.conn)
+			assert.Equalf((*element)(nil), e.b.cut.next, "%s bucket.cut.next:%v != nil", env, e.b.cut.next)
+		}
 	}
 }
 
