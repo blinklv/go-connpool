@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-01-28
+// Last Change: 2019-02-20
 
 // A concurrency-safe connection pool. It can be used to manage and reuse connections
 // based on the destination address of which. This design makes a pool work better with
@@ -332,8 +332,8 @@ func (b *bucket) bind(conn net.Conn) *Conn {
 }
 
 // Cleans up the idle connections of the bucket and returns the number of closed
-// connections. If the shutdown parameter is false, only releases rencently not
-// used connections; otherwise, releases all.
+// connections. If the shutdown parameter is false, only releases connections not
+// used rencently; otherwise, releases all.
 func (b *bucket) cleanup(shutdown bool) (unused int) {
 	var cut element
 
@@ -346,7 +346,7 @@ func (b *bucket) cleanup(shutdown bool) (unused int) {
 	if !shutdown && b.cut != nil {
 		cut, *b.cut = *b.cut, element{}
 	} else {
-		cut, b.top = *b.top, &element{}
+		cut, b.top, b.depth = *b.top, &element{}, 0
 	}
 
 	// The element referenced by the cut field and elements below it will be
