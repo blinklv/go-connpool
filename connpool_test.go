@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2019-01-18
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-01-30
+// Last Change: 2019-02-20
 
 package connpool
 
@@ -22,7 +22,8 @@ func TestBucket(t *testing.T) {
 	t.Run("(closed) bucket.push", testClosedBucketPush)
 	t.Run("bucket.pop", testBucketPop)
 	t.Run("(closed) bucket.pop", testClosedBucketPop)
-	t.Run("(bucket.push/pop", testBucketPushAndPop)
+	t.Run("bucket.push/pop", testBucketPushAndPop)
+	t.Run("bucket.cleanup", testBucketCleanup)
 }
 
 func testBucketPush(t *testing.T) {
@@ -269,6 +270,63 @@ func testBucketPushAndPop(t *testing.T) {
 			assert.NotEqualf((*element)(nil), e.b.cut, "%s bucket.cut:%v is nil", env, e.b.cut)
 			assert.Equalf((*Conn)(nil), e.b.cut.conn, "%s bucket.cut.conn:%v != nil", env, e.b.cut.conn)
 			assert.Equalf((*element)(nil), e.b.cut.next, "%s bucket.cut.next:%v != nil", env, e.b.cut.next)
+		}
+	}
+}
+
+func testBucketCleanup(t *testing.T) {
+	for _, e := range []struct {
+		b        *bucket
+		part     int
+		shutdown bool
+		use      bool
+	}{
+		{b: &bucket{capacity: 1024, top: &element{}}, part: 128, shutdown: false, use: true},
+		{b: &bucket{capacity: 1024, top: &element{}}, part: 127, shutdown: false, use: true},
+		{b: &bucket{capacity: 4096, top: &element{}}, part: 77, shutdown: false, use: true},
+		{b: &bucket{capacity: 8192, top: &element{}}, part: 77, shutdown: false, use: true},
+		{b: &bucket{capacity: 8192, top: &element{}}, part: 77, shutdown: false, use: false},
+		{b: &bucket{capacity: 1024, top: &element{}}, part: 127, shutdown: true, use: true},
+		{b: &bucket{capacity: 4096, top: &element{}}, part: 77, shutdown: true, use: true},
+	} {
+		var (
+			d = &dialer{}
+			b = &bucket{capacity: e.b.capacity, top: &element{}} // cache.
+		)
+
+		execute(16, e.b.capacity, func() {
+			conn, _ := d.dial("192.168.1.1:80")
+			c := e.b.bind(conn)
+			e.b.push(c)
+		})
+
+		assert, env := assert.New(t), sprintf("[capacity:%d part:%d shutdown:%v]",
+			e.b.capacity, e.part, e.shutdown)
+
+		for lastRest, rest := 0, e.b.capacity; rest > 0; {
+			lastRest, rest = rest, max(0, rest-e.part)
+
+			if e.use {
+				execute(16, rest, func() { b.push(e.b.pop()) })
+				execute(16, rest, func() { b.pop().Close() })
+			}
+
+			unused := e.b.cleanup(e.shutdown)
+
+			if !e.shutdown && e.use {
+				t.Logf("%s last_rest:%d rest:%d unused:%d bucket.size:%d", env, lastRest, rest, unused, e.b.size)
+				assert.Equalf(lastRest-rest, unused, "%s last_rest:%d - rest:%d != unused:%d", env, lastRest, rest, unused)
+				assert.Equalf(rest, e.b.size, "%s rest:%d != bucket.size:%d", env, rest, e.b.size)
+				assert.Equalf(e.b.size, int(e.b.idle), "%s bucket.size:%d != bucket.idle:%d", env, e.b.size, e.b.idle)
+				assert.Equalf(rest, int(d.count), "%s rest:%d != release:%d", env, rest, d.count)
+				assert.NotEqualf((*element)(nil), b.top, "%s bucket.top is nil", env)
+			} else {
+				assert.Equalf(0, e.b.size, "%s bucket.size:%d != 0", env, e.b.size)
+				assert.Equalf(0, int(e.b.idle), "%s bucket.idle:%d != 0", env, e.b.idle)
+				assert.Equalf(0, int(d.count), "%s release:%d != 0", env, d.count)
+				assert.NotEqualf((*element)(nil), b.top, "%s bucket.top is nil", env)
+				break
+			}
 		}
 	}
 }
