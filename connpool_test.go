@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2019-01-18
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-02-20
+// Last Change: 2019-03-06
 
 package connpool
 
@@ -16,6 +16,55 @@ import (
 	"testing"
 	"time"
 )
+
+func TestPool(t *testing.T) {
+	t.Run("create/close pool", testCreateAndClosePool)
+}
+
+func testCreateAndClosePool(t *testing.T) {
+	dial := func(string) (net.Conn, error) {
+		return nil, nil
+	}
+
+	for _, e := range []struct {
+		dial              Dial
+		capacity          int
+		period            time.Duration
+		createOK, closeOK bool
+	}{
+		{nil, 32, 2 * time.Minute, false, true},
+		{dial, -10, 2 * time.Minute, false, true},
+		{dial, 64, 5 * time.Second, false, true},
+		{dial, 32, 5 * time.Minute, true, true},
+		{dial, 0, 5 * time.Minute, true, true},
+		{dial, 32, 1 * time.Minute, true, true},
+		{dial, 0, 1 * time.Minute, true, true},
+	} {
+		assert, env := assert.New(t), sprintf("[dial:%v capacity:%d period:%s]", e.dial, e.capacity, e.period)
+		pool, err := New(e.dial, e.capacity, e.period)
+		if !e.createOK {
+			assert.NotEqualf(nil, err, "%s creating a pool should be failed", env)
+			t.Logf("%s create a pool failed: %s", env, err)
+			continue
+		}
+		assert.Equalf(nil, err, "%s creating a pool failed: %s", env, err)
+		assert.Equalf(sprintf("%v", e.dial), sprintf("%v", pool.dial), "pool.dial (%v) != dial (%v)", pool.dial, e.dial)
+		assert.Equalf(e.capacity, pool.capacity, "pool.capacity (%d) != capacity (%d)", pool.capacity, e.capacity)
+		assert.Equalf(e.period, pool.period, "pool.period (%v) != period (%v)", pool.period, e.period)
+
+		err = pool.Close()
+		if !e.closeOK {
+			assert.NotEqualf(nil, err, "%s closing the pool should be failed: %s", env, err)
+			t.Logf("%s closing the pool failed: %s", env, err)
+		}
+		assert.Equalf(nil, err, "%s closing the pool failed: %s", env, err)
+
+		// test duplicate shutdown
+		err = pool.Close()
+		assert.NotEqualf(nil, err, "%s closing the pool should be failed: %s", env, err)
+		t.Logf("%s closing the pool failed: %s", env, err)
+	}
+}
 
 func TestBucket(t *testing.T) {
 	t.Run("bucket.push", testBucketPush)
