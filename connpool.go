@@ -13,6 +13,7 @@ package connpool
 import (
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -156,6 +157,18 @@ type Stats struct {
 	Destinations []DestinationStats `json:"destinations"`
 }
 
+// String returns the readable form of a pool's statistical data.
+func (s *Stats) String() string {
+	strs, total, idle := make([]string, len(s.Destinations)+2), int64(0), int64(0)
+	strs[0] = (time.Unix(s.Timestamp, 0)).String()
+	for i, ds := range s.Destinations {
+		strs[i+2] = ds.String()
+		total, idle = total+ds.Total, idle+ds.Idle
+	}
+	strs[1] = fmt.Sprintf("%-24s total: %-6d idle: %d", "all", total, idle)
+	return strings.Join(strs, "\n")
+}
+
 // Destination's statistical data.
 type DestinationStats struct {
 	// Address identifies a destination, the format of which usually likes
@@ -173,7 +186,7 @@ type DestinationStats struct {
 
 // String returns the compact form of a destination's statistical data.
 func (ds *DestinationStats) String() string {
-	return fmt.Sprintf("%s total(%d) idle(%d)", ds.Address, ds.Total, ds.Idle)
+	return fmt.Sprintf("%-24s total: %-6d idle: %d", ds.Address, ds.Total, ds.Idle)
 }
 
 // Get a statistical data of the Pool.
