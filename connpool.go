@@ -148,48 +148,6 @@ func (pool *Pool) Close() (err error) {
 	return
 }
 
-// Pool's statistical data. You can get it from Pool.Stats method.
-type Stats struct {
-	// Timestamp identifies when this statistical was generated. It equals
-	// to the number of seconds elapsed since January 1, 1970 UTC.
-	Timestamp int64 `json:"timestamp"`
-
-	// Destinations collects all destination statistical data related to the pool.
-	Destinations []DestinationStats `json:"destinations"`
-}
-
-// String returns the readable form of a pool's statistical data.
-func (s *Stats) String() string {
-	strs, total, idle := make([]string, len(s.Destinations)+2), int64(0), int64(0)
-	strs[0] = (time.Unix(s.Timestamp, 0)).String()
-	for i, ds := range s.Destinations {
-		strs[i+2] = ds.String()
-		total, idle = total+ds.Total, idle+ds.Idle
-	}
-	strs[1] = fmt.Sprintf("%-24s total: %-6d idle: %d", "all", total, idle)
-	return strings.Join(strs, "\n")
-}
-
-// Destination's statistical data.
-type DestinationStats struct {
-	// Address identifies a destination, the format of which usually likes
-	// ip:port. In fact, you can not be confined to this format and specify
-	// any only and meaningful value to it.
-	Address string `json:"address"`
-
-	// The total number of connections related to this destination, which
-	// contains the number of active connections and idle connections.
-	Total int64 `json:"total"`
-
-	// The number of idle connections related to this destination.
-	Idle int64 `json:"idle"`
-}
-
-// String returns the compact form of a destination's statistical data.
-func (d *DestinationStats) String() string {
-	return fmt.Sprintf("%-24s total: %-6d idle: %d", d.Address, d.Total, d.Idle)
-}
-
 // Get a statistical data of the Pool.
 func (pool *Pool) Stats() *Stats {
 	stats := &Stats{
@@ -212,21 +170,6 @@ func (pool *Pool) Stats() *Stats {
 
 	sort.Sort(destinations(stats.Destinations))
 	return stats
-}
-
-// Satisfy sort.Interface to sort multiple DestinationsStats structs.
-type destinations []DestinationStats
-
-func (ds destinations) Len() int {
-	return len(ds)
-}
-
-func (ds destinations) Less(i, j int) bool {
-	return strings.Compare(ds[i].Address, ds[j].Address) < 0
-}
-
-func (ds destinations) Swap(i, j int) {
-	ds[i], ds[j] = ds[j], ds[i]
 }
 
 // Returns the number of idle connections of the pool; it's only used in test now.
@@ -485,4 +428,63 @@ func (conn *Conn) Close() error {
 func (conn *Conn) Release() error {
 	atomic.AddInt64(&conn.b.total, -1)
 	return conn.Conn.Close()
+}
+
+// Pool's statistical data. You can get it from Pool.Stats method.
+type Stats struct {
+	// Timestamp identifies when this statistical was generated. It equals
+	// to the number of seconds elapsed since January 1, 1970 UTC.
+	Timestamp int64 `json:"timestamp"`
+
+	// Destinations collects all destination statistical data related to the pool.
+	Destinations []DestinationStats `json:"destinations"`
+}
+
+// String returns the readable form of a pool's statistical data.
+func (s *Stats) String() string {
+	strs, total, idle := make([]string, len(s.Destinations)+2), int64(0), int64(0)
+	strs[0] = (time.Unix(s.Timestamp, 0)).String()
+	for i, ds := range s.Destinations {
+		strs[i+2] = ds.String()
+		total, idle = total+ds.Total, idle+ds.Idle
+	}
+	strs[1] = sprintf("%-24s total: %-6d idle: %d", "all", total, idle)
+	return strings.Join(strs, "\n")
+}
+
+// Destination's statistical data.
+type DestinationStats struct {
+	// Address identifies a destination, the format of which usually likes
+	// ip:port. In fact, you can not be confined to this format and specify
+	// any only and meaningful value to it.
+	Address string `json:"address"`
+
+	// The total number of connections related to this destination, which
+	// contains the number of active connections and idle connections.
+	Total int64 `json:"total"`
+
+	// The number of idle connections related to this destination.
+	Idle int64 `json:"idle"`
+}
+
+// String returns the compact form of a destination's statistical data.
+func (d *DestinationStats) String() string {
+	return sprintf("%-24s total: %-6d idle: %d", d.Address, d.Total, d.Idle)
+}
+
+var sprintf = fmt.Sprintf
+
+// Satisfy sort.Interface to sort multiple DestinationsStats structs.
+type destinations []DestinationStats
+
+func (ds destinations) Len() int {
+	return len(ds)
+}
+
+func (ds destinations) Less(i, j int) bool {
+	return strings.Compare(ds[i].Address, ds[j].Address) < 0
+}
+
+func (ds destinations) Swap(i, j int) {
+	ds[i], ds[j] = ds[j], ds[i]
 }
