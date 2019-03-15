@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-02-20
+// Last Change: 2019-03-14
 
 // A concurrency-safe connection pool. It can be used to manage and reuse connections
 // based on the destination address of which. This design makes a pool work better with
@@ -188,6 +188,15 @@ func (pool *Pool) Stats() *Stats {
 	}
 
 	return stats
+}
+
+// Returns the number of idle connections of the pool; it's only used in test now.
+func (pool *Pool) _size() (size int) {
+	stats := pool.Stats()
+	for _, d := range stats.Destinations {
+		size += int(d.Idle)
+	}
+	return
 }
 
 // select a bucket for the address. If it doesn't exist, create a new one; which
