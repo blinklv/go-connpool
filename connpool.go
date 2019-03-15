@@ -171,6 +171,11 @@ type DestinationStats struct {
 	Idle int64 `json:"idle"`
 }
 
+// String returns the compact form of a destination's statistical data.
+func (ds *DestinationStats) String() string {
+	return fmt.Sprintf("%s total(%d) idle(%d)", ds.Address, ds.Total, ds.Idle)
+}
+
 // Get a statistical data of the Pool.
 func (pool *Pool) Stats() *Stats {
 	stats := &Stats{
