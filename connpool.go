@@ -13,6 +13,7 @@ package connpool
 import (
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -185,8 +186,8 @@ type DestinationStats struct {
 }
 
 // String returns the compact form of a destination's statistical data.
-func (ds *DestinationStats) String() string {
-	return fmt.Sprintf("%-24s total: %-6d idle: %d", ds.Address, ds.Total, ds.Idle)
+func (d *DestinationStats) String() string {
+	return fmt.Sprintf("%-24s total: %-6d idle: %d", d.Address, d.Total, d.Idle)
 }
 
 // Get a statistical data of the Pool.
@@ -209,7 +210,23 @@ func (pool *Pool) Stats() *Stats {
 		})
 	}
 
+	sort.Sort(destinations(stats.Destinations))
 	return stats
+}
+
+// Satisfy sort.Interface to sort multiple DestinationsStats structs.
+type destinations []DestinationStats
+
+func (ds destinations) Len() int {
+	return len(ds)
+}
+
+func (ds destinations) Less(i, j int) bool {
+	return strings.Compare(ds[i].Address, ds[j].Address) < 0
+}
+
+func (ds destinations) Swap(i, j int) {
+	ds[i], ds[j] = ds[j], ds[i]
 }
 
 // Returns the number of idle connections of the pool; it's only used in test now.
