@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-03-14
+// Last Change: 2019-03-15
 
 // A concurrency-safe connection pool. It can be used to manage and reuse connections
 // based on the destination address of which. This design makes a pool work better with
@@ -41,6 +41,10 @@ type Pool struct {
 	buckets  map[string]*bucket
 	exit     chan chan struct{}
 	closed   bool
+
+	// The 'interrupt' field is only used in test mode; it will be nil
+	// in normal cases.
+	interrupt chan chan struct{}
 }
 
 // Create a connection pool. The dial parameter defines how to create a new
@@ -229,16 +233,37 @@ func (pool *Pool) selectBucket(address string) (b *bucket) {
 
 // cleanup idle connections periodically.
 func (pool *Pool) cleanup() {
-	var timer = time.NewTimer(pool.period)
+	timer := time.NewTimer(pool.period)
+	exit := func(done chan struct{}) {
+		timer.Stop()
+		pool._cleanup(true)
+		close(done)
+	}
+
 	for {
 		select {
 		case <-timer.C:
 			pool._cleanup(false)
+
+			// NOTE:
+			// 1.The following statements only run in test mode. So no matter how
+			//   complicated it is, it won't affect performance in normal cases.
+			// 2.The interrupt field isn't empty only in test mode.
+			if pool.interrupt != nil {
+				back := make(chan struct{})
+				select {
+				case pool.interrupt <- back:
+				case <-back:
+				case done := <-pool.exit:
+					exit(done)
+					return
+				}
+			}
+
 			timer.Reset(pool.period)
 		case done := <-pool.exit:
-			timer.Stop()
-			pool._cleanup(true)
-			close(done)
+			exit(done)
+			return
 		}
 	}
 }
