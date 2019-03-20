@@ -218,19 +218,10 @@ func (pool *Pool) cleanup() {
 		case <-pool.timer.C:
 			pool._cleanup(false)
 
-			// NOTE:
-			// 1.The following statements only run in test mode. So no matter how
-			//   complicated it is, it won't affect performance in normal cases.
-			// 2.The interrupt field isn't empty only in test mode.
-			if pool.interrupt != nil {
-				back := make(chan struct{})
-				select {
-				case pool.interrupt <- back:
-				case <-back:
-				case done := <-pool.exit:
-					pool._finish(done)
-					return
-				}
+			// NOTE: The _interrupt method only runs in test mode, so no matter how
+			// complicated it is, it won't affect the performance of normal cases.
+			if pool.interrupt != nil && pool._interrupt() {
+				return
 			}
 
 			pool.timer.Reset(pool.period)
@@ -263,6 +254,19 @@ func (pool *Pool) _cleanup(shutdown bool) {
 	for _, b := range buckets {
 		b.cleanup(shutdown)
 	}
+}
+
+// _interrupt method will be called if you set the interrupt field.
+func (pool *Pool) _interrupt() (exit bool) {
+	back := make(chan struct{})
+	select {
+	case pool.interrupt <- back:
+	case <-back:
+	case done := <-pool.exit:
+		pool._finish(done)
+		exit = true
+	}
+	return
 }
 
 // bucket is a collection of connections, the internal structure of which is
