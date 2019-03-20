@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-03-15
+// Last Change: 2019-03-20
 
 // A concurrency-safe connection pool. It can be used to manage and reuse connections
 // based on the destination address of which. This design makes a pool work better with
@@ -42,6 +42,7 @@ type Pool struct {
 	period   time.Duration
 	buckets  map[string]*bucket
 	exit     chan chan struct{}
+	timer    *time.Timer
 	closed   bool
 
 	// The 'interrupt' field is only used in test mode; it will be nil
@@ -82,6 +83,7 @@ func New(dial Dial, capacity int, period time.Duration) (*Pool, error) {
 		period:   period,
 		buckets:  make(map[string]*bucket),
 		exit:     make(chan chan struct{}),
+		timer:    time.NewTimer(period),
 	}
 
 	// The cleanup method runs in a new goroutine. In fact, the primary reason
@@ -211,16 +213,9 @@ func (pool *Pool) selectBucket(address string) (b *bucket) {
 
 // cleanup idle connections periodically.
 func (pool *Pool) cleanup() {
-	timer := time.NewTimer(pool.period)
-	exit := func(done chan struct{}) {
-		timer.Stop()
-		pool._cleanup(true)
-		close(done)
-	}
-
 	for {
 		select {
-		case <-timer.C:
+		case <-pool.timer.C:
 			pool._cleanup(false)
 
 			// NOTE:
@@ -233,17 +228,24 @@ func (pool *Pool) cleanup() {
 				case pool.interrupt <- back:
 				case <-back:
 				case done := <-pool.exit:
-					exit(done)
+					pool._finish(done)
 					return
 				}
 			}
 
-			timer.Reset(pool.period)
+			pool.timer.Reset(pool.period)
 		case done := <-pool.exit:
-			exit(done)
+			pool._finish(done)
 			return
 		}
 	}
+}
+
+// do some finishing work.
+func (pool *Pool) _finish(done chan struct{}) {
+	pool.timer.Stop()
+	pool._cleanup(true)
+	close(done)
 }
 
 // cleanup idle connections.
