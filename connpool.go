@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-03-20
+// Last Change: 2019-03-21
 
 // A concurrency-safe connection pool. It can be used to manage and reuse connections
 // based on the destination address of which. This design makes a pool work better with
@@ -19,6 +19,8 @@ import (
 	"sync/atomic"
 	"time"
 )
+
+var testMode = false // Controls whether the package runs in test mode.
 
 // This type defines how to connect to the address. The purpose of designing this
 // type is to serve the Pool struct. It's not as common as net.Dial that you can
@@ -73,7 +75,7 @@ func New(dial Dial, capacity int, period time.Duration) (*Pool, error) {
 		return nil, fmt.Errorf("capacity (%d) can't be less than zero", capacity)
 	}
 
-	if period < time.Minute {
+	if !testMode && period < time.Minute {
 		return nil, fmt.Errorf("cleanup period (%s) can't be less than 1 min", period)
 	}
 
@@ -84,6 +86,10 @@ func New(dial Dial, capacity int, period time.Duration) (*Pool, error) {
 		buckets:  make(map[string]*bucket),
 		exit:     make(chan chan struct{}),
 		timer:    time.NewTimer(period),
+	}
+
+	if testMode {
+		pool.interrupt = make(chan chan struct{})
 	}
 
 	// The cleanup method runs in a new goroutine. In fact, the primary reason
@@ -220,7 +226,7 @@ func (pool *Pool) cleanup() {
 
 			// NOTE: The _interrupt method only runs in test mode, so no matter how
 			// complicated it is, it won't affect the performance of normal cases.
-			if pool.interrupt != nil && pool._interrupt() {
+			if testMode && pool._interrupt() {
 				return
 			}
 
@@ -256,7 +262,7 @@ func (pool *Pool) _cleanup(shutdown bool) {
 	}
 }
 
-// _interrupt method will be called if you set the interrupt field.
+// _interrupt method will be called when the package runs in test mode.
 func (pool *Pool) _interrupt() (exit bool) {
 	back := make(chan struct{})
 	select {
