@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2019-01-18
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-03-06
+// Last Change: 2019-03-21
 
 package connpool
 
@@ -19,6 +19,7 @@ import (
 
 func TestPool(t *testing.T) {
 	t.Run("create/close pool", testCreateAndClosePool)
+	t.Run("pool.get", testPoolGet)
 }
 
 func testCreateAndClosePool(t *testing.T) {
@@ -64,6 +65,77 @@ func testCreateAndClosePool(t *testing.T) {
 		assert.NotEqualf(nil, err, "%s closing the pool should be failed: %s", env, err)
 		t.Logf("%s closing the pool failed: %s", env, err)
 	}
+}
+
+func testPoolGet(t *testing.T) {
+	testMode = true // Runs package in test mode.
+	defer func() {
+		// Recover the package to normal mode when this function has done.
+		testMode = false
+	}()
+
+	addresses := []string{
+		"192.168.1.1:80",
+		"192.168.1.2:80",
+		"192.168.1.3:80",
+		"192.168.1.4:80",
+		"192.168.1.5:80",
+		"192.168.1.6:80",
+		"192.168.1.7:80",
+		"192.168.1.8:80",
+		"192.168.1.9:80",
+		"192.168.1.10:80",
+		"192.168.1.11:80",
+		"192.168.1.12:80",
+	}
+
+	var (
+		d       = &dialer{}
+		pool, _ = New(d.dial, 64, time.Second)
+		addr    int64
+	)
+
+	assert := assert.New(t)
+
+	for w, n, i, inc := 2, 100, 0, true; i < 100; i++ {
+		var succ, fail int64
+
+		execute(w, n, func() {
+			conn, err := pool.Get(addresses[int(atomic.AddInt64(&addr, 1))%len(addresses)])
+			if err == nil {
+				atomic.AddInt64(&succ, 1)
+			} else {
+				atomic.AddInt64(&fail, 1)
+			}
+			conn.Close()
+		})
+
+		back := <-pool.interrupt
+		env := sprintf("%d dial:%d worker:%d number:%d rest:%d pool-size:%d", i, d.total, w, n, d.count, pool._size())
+
+		fmt.Printf("%s\n%s\n", env, pool.Stats())
+		assert.Equalf(n, int(succ), "%s success:%d != number:%d", env, succ, n)
+		assert.Equalf(0, int(fail), "%s fail:%d is not zero", env, fail)
+		assert.Equalf(int(d.count), pool._size(), "%s rest:%d != pool-size:%d", env, d.count, pool._size())
+
+		close(back)
+
+		if w <= 2 || n <= 100 {
+			inc = true
+		} else if w >= 2048 || n >= 100000 {
+			inc = false
+		}
+
+		if inc {
+			w, n = w*2, n*2
+		} else {
+			w, n = w/2, n/2
+		}
+	}
+
+	pool.Close()
+	assert.Equalf(0, pool._size(), "pool-size:%d is not zero after closing", pool._size())
+	assert.Equalf(0, int(d.count), "rest:%d is not zero after closing", d.count)
 }
 
 func TestBucket(t *testing.T) {
@@ -399,6 +471,7 @@ func execute(parallel, n int, cb func()) {
 type dialer struct {
 	port  int32
 	count int64
+	total int64
 }
 
 func (d *dialer) dial(address string) (net.Conn, error) {
@@ -408,10 +481,9 @@ func (d *dialer) dial(address string) (net.Conn, error) {
 		remote: resolveTCPAddr(address),
 	}
 	atomic.AddInt64(&d.count, 1)
+	atomic.AddInt64(&d.total, 1)
 	return c, nil
 }
-
-var sprintf = fmt.Sprintf
 
 func resolveTCPAddr(s string) net.Addr {
 	addr, _ := net.ResolveTCPAddr("tcp", s)
