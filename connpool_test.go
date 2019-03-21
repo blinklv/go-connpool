@@ -18,7 +18,10 @@ import (
 
 func TestPool(t *testing.T) {
 	t.Run("create/close pool", testCreateAndClosePool)
-	t.Run("pool.get", testPoolGet)
+	t.Run("pool.new", testPoolNew)
+	if !testing.Short() {
+		t.Run("pool.get", testPoolGet)
+	}
 }
 
 func testCreateAndClosePool(t *testing.T) {
@@ -140,6 +143,68 @@ func testPoolGet(t *testing.T) {
 	pool.Close()
 	assert.Equalf(0, pool._size(), "pool-size:%d is not zero after closing", pool._size())
 	assert.Equalf(0, int(d.count), "rest:%d is not zero after closing", d.count)
+}
+
+func testPoolNew(t *testing.T) {
+	addresses := []string{
+		"192.168.1.1:80",
+		"192.168.1.2:80",
+		"192.168.1.3:80",
+		"192.168.1.4:80",
+		"192.168.1.5:80",
+		"192.168.1.6:80",
+		"192.168.1.7:80",
+		"192.168.1.8:80",
+		"192.168.1.9:80",
+		"192.168.1.10:80",
+		"192.168.1.11:80",
+		"192.168.1.12:80",
+	}
+
+	for _, e := range []struct {
+		capacity int
+		n        int
+	}{
+		{8, 1000},
+		{16, 1000},
+		{32, 2000},
+		{64, 10000},
+		{128, 10000},
+	} {
+
+		var (
+			d                = &dialer{}
+			pool, _          = New(d.dial, e.capacity, time.Hour)
+			addr, succ, fail int64
+			env              = sprintf("[capacity:%d number:%d]", e.capacity, e.n)
+			assert           = assert.New(t)
+		)
+
+		execute(64, e.n, func() {
+			conn, err := pool.New(addresses[int(atomic.AddInt64(&addr, 1))%len(addresses)])
+			if err == nil {
+				atomic.AddInt64(&succ, 1)
+			} else {
+				atomic.AddInt64(&fail, 1)
+			}
+			conn.Close()
+		})
+
+		t.Logf("%s dial:%d rest:%d pool-size:%d\n%s\n", env, d.total, d.count, pool._size(), pool.Stats())
+		assert.Equalf(e.n, int(succ), "%s success:%d != number:%d", env, succ, e.n)
+		assert.Equalf(0, int(fail), "%s fail:%d is not zero", env, fail)
+		assert.Equalf(int(d.count), pool._size(), "%s rest:%d != pool-size:%d", env, d.count, pool._size())
+		assert.Equalf(len(addresses)*e.capacity, pool._size(), "pool._size:%d is not correct", env, pool._size())
+		assert.Equalf(e.n, int(d.total), "%s number:%d != dial-total:%d", env, e.n, d.total)
+		for _, b := range pool.buckets {
+			assert.Equalf(0, b.depth, "%s bucket.depth:%d is not zero", env, b.depth)
+			assert.Equalf(b._depth(), b.depth, "%s bucket._depth:%d != bucket.depth:%d", env, b._depth(), b.depth)
+		}
+
+		pool.Close()
+		assert.Equalf(0, pool._size(), "pool-size:%d is not zero after closing", pool._size())
+		assert.Equalf(0, int(d.count), "rest:%d is not zero after closing", d.count)
+	}
 }
 
 func TestBucket(t *testing.T) {
