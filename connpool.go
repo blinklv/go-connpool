@@ -180,15 +180,6 @@ func (pool *Pool) Stats() *Stats {
 	return stats
 }
 
-// Returns the number of idle connections of the pool; it's only used in test now.
-func (pool *Pool) _size() (size int) {
-	stats := pool.Stats()
-	for _, d := range stats.Destinations {
-		size += int(d.Idle)
-	}
-	return
-}
-
 // select a bucket for the address. If it doesn't exist, create a new one; which
 // means the return value of this function can't be nil.
 func (pool *Pool) selectBucket(address string) (b *bucket) {
@@ -271,6 +262,14 @@ func (pool *Pool) _interrupt() (exit bool) {
 	case done := <-pool.exit:
 		pool._finish(done)
 		exit = true
+	}
+	return
+}
+
+// Returns the number of idle connections of the pool; it's only used in test now.
+func (pool *Pool) _size() (size int) {
+	for _, b := range pool.buckets {
+		size += b.size
 	}
 	return
 }
