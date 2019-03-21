@@ -183,6 +183,7 @@ func testBucketPush(t *testing.T) {
 		assert.Equalf(e.b.total, succ, "%s bucket.total:%d != succ:%d", env, e.b.total, succ)
 		assert.Equalf(e.b.idle, succ, "%s bucket.idle:%d != succ:%d", env, e.b.idle, succ)
 		assert.Equalf(e.b.depth, 0, "%s bucket.depth:%d != 0", env, e.b.depth)
+		assert.Equalf(e.b._depth(), e.b.depth, "%s bucket._depth:%d != bucket.depth:%d", env, e.b._depth(), e.b.depth)
 		assert.Equalf((*element)(nil), e.b.cut, "%s bucket.cut:%v != nil", env, e.b.cut)
 	}
 }
@@ -223,6 +224,7 @@ func testClosedBucketPush(t *testing.T) {
 		assert.Equalf(0, int(e.b.total), "%s bucket.total:%d != 0", env, e.b.total)
 		assert.Equalf(0, int(e.b.idle), "%s bucket.idle:%d != 0", env, e.b.idle)
 		assert.Equalf(0, e.b.depth, "%s bucket.depth:%d != 0", env, e.b.depth)
+		assert.Equalf(e.b._depth(), e.b.depth, "%s bucket._depth:%d != bucket.depth:%d", env, e.b._depth(), e.b.depth)
 		assert.Equalf((*element)(nil), e.b.cut, "%s bucket.cut:%v != nil", env, e.b.cut)
 	}
 }
@@ -264,6 +266,7 @@ func testBucketPop(t *testing.T) {
 		assert.Equalf(e.b.size, e.b._size(), "%s bucket.size:%d != bucket._size:%d", env, e.b.size, e.b._size())
 		assert.Equalf(e.b.size, int(e.b.idle), "%s bucket.size:%d != bucket.idle:%d", env, e.b.size, e.b.idle)
 		assert.Equalf(0, e.b.depth, "%s bucket.depth:%d != 0", env, e.b.depth)
+		assert.Equalf(e.b._depth(), e.b.depth, "%s bucket._depth:%d != bucket.depth:%d", env, e.b._depth(), e.b.depth)
 
 		if e.b.size == 0 {
 			assert.Equalf(element{}, *(e.b.top), "%s bucket.top:%v is not empty", env, e.b.top)
@@ -283,6 +286,7 @@ func testBucketPop(t *testing.T) {
 
 		assert.Equalf(e.b.capacity, e.b.size, "%s bucket.size:%d != bucket.capacity:%d", env, e.b.capacity, e.b.size)
 		assert.Equalf(int(succ), e.b.depth, "%s bucket.depth:%d != bucket.size:%d", env, e.b.depth, e.b.size)
+		assert.Equalf(e.b._depth(), e.b.depth, "%s bucket._depth:%d != bucket.depth:%d", env, e.b._depth(), e.b.depth)
 	}
 }
 
@@ -323,6 +327,7 @@ func testClosedBucketPop(t *testing.T) {
 		assert.Equalf(e.b.size, e.b._size(), "%s bucket.size:%d != bucket._size:%d", env, e.b.size, e.b._size())
 		assert.Equalf(e.b.size, int(e.b.idle), "%s bucket.size:%d != bucket._idle:%d", env, e.b.size, e.b.idle)
 		assert.Equalf(0, e.b.depth, "%s bucket.depth:%d is not zero", env, e.b.depth)
+		assert.Equalf(e.b._depth(), e.b.depth, "%s bucket._depth:%d != bucket.depth:%d", env, e.b._depth(), e.b.depth)
 		assert.Equalf((*element)(nil), e.b.cut, "%s bucket.cut:%v is not nil", env, e.b.cut)
 	}
 }
@@ -386,6 +391,7 @@ func testBucketPushAndPop(t *testing.T) {
 		assert.Equalf(max(int(pushSucc-popSucc), 0), e.b.size, "%s max(push-succ:%d - pop-succ:%d, 0) != bucket.size:%d", env, pushSucc, popSucc, e.b.size)
 		assert.Equalf(e.b.size, e.b._size(), "%s bucket.size:%d != bucket._size:%d", env, e.b.size, e.b._size())
 		assert.Equalf(e.b.size, int(e.b.idle), "%s bucket.size:%d != bucket.idle:%d", env, e.b.size, e.b.idle)
+		assert.Equalf(e.b._depth(), e.b.depth, "%s bucket._depth:%d != bucket.depth:%d", env, e.b._depth(), e.b.depth)
 
 		if e.b.depth != 0 && e.b.depth == e.b.size {
 			assert.NotEqualf((*element)(nil), e.b.cut, "%s bucket.cut:%v is nil", env, e.b.cut)
@@ -441,6 +447,7 @@ func testBucketCleanup(t *testing.T) {
 				assert.Equalf(e.b.size, int(e.b.idle), "%s bucket.size:%d != bucket.idle:%d", env, e.b.size, e.b.idle)
 				assert.Equalf(rest, int(d.count), "%s rest:%d != release:%d", env, rest, d.count)
 				assert.NotEqualf((*element)(nil), b.top, "%s bucket.top is nil", env)
+				assert.Equalf(e.b._depth(), e.b.depth, "%s bucket._depth:%d != bucket.depth:%d", env, e.b._depth(), e.b.depth)
 			} else {
 				assert.Equalf(0, e.b.size, "%s bucket.size:%d != 0", env, e.b.size)
 				assert.Equalf(0, int(e.b.idle), "%s bucket.idle:%d != 0", env, e.b.idle)
