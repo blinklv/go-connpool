@@ -406,6 +406,16 @@ func (b *bucket) _size() int {
 	return size
 }
 
+// Computing the size of all elements above the element referenced by the
+// cut field; it's only used in test now.
+func (b *bucket) _depth() int {
+	depth := 0
+	for e := b.top; b.cut != nil && e != b.cut; e = e.next {
+		depth++
+	}
+	return depth
+}
+
 // The basic element of the bucket type. Multiple elements are organized
 // in linked list form.
 type element struct {
