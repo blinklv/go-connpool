@@ -8,7 +8,6 @@
 package connpool
 
 import (
-	"fmt"
 	"github.com/stretchr/testify/assert"
 	"net"
 	"sync"
@@ -113,10 +112,15 @@ func testPoolGet(t *testing.T) {
 		back := <-pool.interrupt
 		env := sprintf("%d dial:%d worker:%d number:%d rest:%d pool-size:%d", i, d.total, w, n, d.count, pool._size())
 
-		fmt.Printf("%s\n%s\n", env, pool.Stats())
+		t.Logf("%s\n%s\n", env, pool.Stats())
 		assert.Equalf(n, int(succ), "%s success:%d != number:%d", env, succ, n)
 		assert.Equalf(0, int(fail), "%s fail:%d is not zero", env, fail)
 		assert.Equalf(int(d.count), pool._size(), "%s rest:%d != pool-size:%d", env, d.count, pool._size())
+		for _, b := range pool.buckets {
+			assert.Equalf(b.size, b._size(), "%s bucket.size:%d != bucket._size:%d", env, b.size, b._size())
+			assert.Equalf(b.size, int(b.idle), "%s bucket.size:%d != bucket.idle:%d", env, b.size, b.idle)
+			assert.Equalf(b._depth(), b.depth, "%s bucket._depth:%d != bucket.depth:%d", env, b._depth(), b.depth)
+		}
 
 		close(back)
 
