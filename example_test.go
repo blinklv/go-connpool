@@ -3,12 +3,11 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-31
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2018-08-08
+// Last Change: 2019-03-22
 
 package connpool_test
 
 import (
-	"encoding/json"
 	"fmt"
 	"github.com/blinklv/go-connpool"
 	"io"
@@ -257,9 +256,7 @@ func (c *client) run() {
 }
 
 func (c *client) stats() {
-	stats := c.pool.Stats()
-	data, _ := json.MarshalIndent(stats, " ", " ")
-	log.Printf("%s", data)
+	log.Printf("\nconnection statistics %s", c.pool.Stats())
 	for _, u := range c.s.addressArray {
 		log.Printf("(%s) total: %d fail: %d",
 			u.address, atomic.LoadInt64(&u.count), atomic.LoadInt64(&u.fail))
