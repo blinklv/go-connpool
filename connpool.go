@@ -18,7 +18,9 @@ import (
 	"time"
 )
 
-var testMode = false // Controls whether the package runs in test mode.
+// Control whether the package runs in testing mode. The name of all variables, fields,
+// functions, and methods related to testing will have an underscore ('_') prefix.
+var _test = false
 
 // This type defines how to connect to the address. The purpose of designing this
 // type is to serve the Pool struct. It's not as common as net.Dial that you can
@@ -42,12 +44,11 @@ type Pool struct {
 	period   time.Duration
 	buckets  map[string]*bucket
 	exit     chan chan struct{}
-	timer    *time.Timer
 	closed   bool
 
-	// The 'interrupt' field is only used in test mode; it will be nil
-	// in normal cases.
-	interrupt chan chan struct{}
+	// _interrupt channel is used to notify users the connection pool has
+	// been cleaned once. (**only used in testing mode**)
+	_interrupt chan chan struct{}
 }
 
 // Create a connection pool. The dial parameter defines how to create a new
@@ -73,7 +74,8 @@ func New(dial Dial, capacity int, period time.Duration) (*Pool, error) {
 		return nil, fmt.Errorf("capacity (%d) can't be less than zero", capacity)
 	}
 
-	if !testMode && period < time.Minute {
+	// NOTE: period can be less than 1 min in testing mode :)
+	if !_test && period < time.Minute {
 		return nil, fmt.Errorf("cleanup period (%s) can't be less than 1 min", period)
 	}
 
@@ -83,16 +85,15 @@ func New(dial Dial, capacity int, period time.Duration) (*Pool, error) {
 		period:   period,
 		buckets:  make(map[string]*bucket),
 		exit:     make(chan chan struct{}),
-		timer:    time.NewTimer(period),
 	}
 
-	if testMode {
-		pool.interrupt = make(chan chan struct{})
+	if _test {
+		pool._interrupt = make(chan chan struct{})
 	}
 
-	// The cleanup method runs in a new goroutine. In fact, the primary reason
+	// The autoCleanup method runs in a new goroutine. In fact, the primary reason
 	// of designing the Closed method is stopping it to prevent resource leak.
-	go pool.cleanup()
+	go pool.autoCleanup()
 
 	return pool, nil
 }
@@ -229,36 +230,30 @@ func (pool *Pool) selectBucket(address string) (b *bucket) {
 	return
 }
 
-// cleanup idle connections periodically.
-func (pool *Pool) cleanup() {
+// Cleanup idle connections periodically.
+func (pool *Pool) autoCleanup() {
+	timer := time.NewTimer(pool.period)
 	for {
 		select {
-		case <-pool.timer.C:
-			pool._cleanup(false)
+		case <-timer.C:
+			pool.cleanup(false)
 
-			// NOTE: The _interrupt method only runs in test mode, so no matter how
-			// complicated it is, it won't affect the performance of normal cases.
-			if testMode && pool._interrupt() {
-				return
+			if _test {
+				pool._wait()
 			}
 
-			pool.timer.Reset(pool.period)
+			timer.Reset(pool.period)
 		case done := <-pool.exit:
-			pool._finish(done)
+			timer.Stop()
+			pool.cleanup(true)
+			close(done)
 			return
 		}
 	}
 }
 
-// do some finishing work.
-func (pool *Pool) _finish(done chan struct{}) {
-	pool.timer.Stop()
-	pool._cleanup(true)
-	close(done)
-}
-
-// cleanup idle connections.
-func (pool *Pool) _cleanup(shutdown bool) {
+// Cleanup idle connections once.
+func (pool *Pool) cleanup(shutdown bool) {
 	pool.rw.RLock()
 	var buckets = make([]*bucket, 0, len(pool.buckets))
 	// If we invokes the bucket.cleanup method in this for-loop, which
@@ -274,20 +269,15 @@ func (pool *Pool) _cleanup(shutdown bool) {
 	}
 }
 
-// _interrupt method will be called when the package runs in test mode.
-func (pool *Pool) _interrupt() (exit bool) {
+// _wait method sends a signal to users that the pool has been cleaned once,
+// and waits users finish their works. (**only used in testing mode**)
+func (pool *Pool) _wait() {
 	back := make(chan struct{})
-	select {
-	case pool.interrupt <- back:
-	case <-back:
-	case done := <-pool.exit:
-		pool._finish(done)
-		exit = true
-	}
-	return
+	pool._interrupt <- back
+	<-back
 }
 
-// Returns the number of idle connections of the pool; it's only used in test now.
+// Returns the number of idle connections of the pool. (**only used in testing mode**)
 func (pool *Pool) _size() (size int) {
 	for _, b := range pool.buckets {
 		size += b.size
@@ -409,15 +399,14 @@ func (b *bucket) cleanup(shutdown bool) (unused int) {
 	return
 }
 
-// Set the bucket to the closed state; it's only used in test now.
+// Set the bucket to the closed state. (**only used in testing mode**)
 func (b *bucket) _close() {
 	b.Lock()
 	b.closed = true
 	b.Unlock()
 }
 
-// Iterating all elements in the bucket to compute its size; it's only
-// used in test now.
+// Iterating all elements to compute its size. (**only used in testing mode**)
 func (b *bucket) _size() int {
 	size := 0
 	for e := b.top; e.conn != nil; e = e.next {
@@ -427,7 +416,7 @@ func (b *bucket) _size() int {
 }
 
 // Computing the size of all elements above the element referenced by the
-// cut field; it's only used in test now.
+// cut field. (**only used in testing mode**)
 func (b *bucket) _depth() int {
 	depth := 0
 	for e := b.top; b.cut != nil && e != b.cut; e = e.next {
