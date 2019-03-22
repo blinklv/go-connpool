@@ -3,13 +3,17 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2019-01-18
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-03-21
+// Last Change: 2019-03-22
 
 package connpool
 
 import (
+	"fmt"
 	"github.com/stretchr/testify/assert"
+	"log"
 	"net"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -70,10 +74,10 @@ func testCreateAndClosePool(t *testing.T) {
 }
 
 func testPoolGet(t *testing.T) {
-	testMode = true // Runs package in test mode.
+	_test = true // Runs package in testing mode.
 	defer func() {
 		// Recover the package to normal mode when this function has done.
-		testMode = false
+		_test = false
 	}()
 
 	addresses := []string{
@@ -112,10 +116,10 @@ func testPoolGet(t *testing.T) {
 			conn.Close()
 		})
 
-		back := <-pool.interrupt
+		back := <-pool._interrupt
 		env := sprintf("%d dial:%d worker:%d number:%d rest:%d pool-size:%d", i, d.total, w, n, d.count, pool._size())
 
-		t.Logf("%s\n%s\n", env, pool.Stats())
+		logf("%s\n%s\n", env, stats2str(pool.Stats()))
 		assert.Equalf(n, int(succ), "%s success:%d != number:%d", env, succ, n)
 		assert.Equalf(0, int(fail), "%s fail:%d is not zero", env, fail)
 		assert.Equalf(int(d.count), pool._size(), "%s rest:%d != pool-size:%d", env, d.count, pool._size())
@@ -190,7 +194,7 @@ func testPoolNew(t *testing.T) {
 			conn.Close()
 		})
 
-		t.Logf("%s dial:%d rest:%d pool-size:%d\n%s\n", env, d.total, d.count, pool._size(), pool.Stats())
+		t.Logf("%s dial:%d rest:%d pool-size:%d\n%s\n", env, d.total, d.count, pool._size(), stats2str(pool.Stats()))
 		assert.Equalf(e.n, int(succ), "%s success:%d != number:%d", env, succ, e.n)
 		assert.Equalf(0, int(fail), "%s fail:%d is not zero", env, fail)
 		assert.Equalf(int(d.count), pool._size(), "%s rest:%d != pool-size:%d", env, d.count, pool._size())
@@ -528,6 +532,19 @@ func testBucketCleanup(t *testing.T) {
 	}
 }
 
+// Returns the readable form of a pool's statistical data.
+func stats2str(s *Stats) string {
+	sort.Sort(destinations(s.Destinations))
+	strs, total, idle := make([]string, len(s.Destinations)+2), int64(0), int64(0)
+	strs[0] = (time.Unix(s.Timestamp, 0)).String()
+	for i, d := range s.Destinations {
+		strs[i+2] = sprintf("%-24s total: %-6d idle: %d", d.Address, d.Total, d.Idle)
+		total, idle = total+d.Total, idle+d.Idle
+	}
+	strs[1] = sprintf("%-24s total: %-6d idle: %d", "all", total, idle)
+	return strings.Join(strs, "\n")
+}
+
 // Executing a callback function n times in multiple goroutines simultaneously.
 func execute(parallel, n int, cb func()) {
 	var wg = &sync.WaitGroup{}
@@ -605,6 +622,21 @@ func (c *connection) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
+// Satisfy sort.Interface to sort multiple DestinationsStats structs.
+type destinations []DestinationStats
+
+func (ds destinations) Len() int {
+	return len(ds)
+}
+
+func (ds destinations) Less(i, j int) bool {
+	return strings.Compare(ds[i].Address, ds[j].Address) < 0
+}
+
+func (ds destinations) Swap(i, j int) {
+	ds[i], ds[j] = ds[j], ds[i]
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -617,4 +649,12 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+var sprintf = fmt.Sprintf
+
+func logf(format string, args ...interface{}) {
+	if testing.Verbose() {
+		log.Printf(format, args...)
+	}
 }
