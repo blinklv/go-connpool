@@ -21,7 +21,7 @@ $ go get github.com/blinklv/go-connpool
 
 I only introduce some simple usages here. The more details of **API** you can get from [GoDoc](https://godoc.org/github.com/blinklv/go-connpool).
 
-#### Create and close a connection pool
+#### Create and Close A Connection Pool
 
 You need to create a `Pool` instance at first. There're three parameters you should specify. 
 
@@ -46,7 +46,7 @@ run(pool)
 pool.Close()
 ```
 
-#### Get and create connections from a pool
+#### Get and Create Connections From A Pool
 
 You can get a connection from your `Pool` instance, the destination address of which is equal to the `address` argument passed by you. If there exist some idle connections related to this address in the pool, one of which will be returned directly to you. I think this is why we use the connection pool. 
 
@@ -84,7 +84,7 @@ return err
 
 `Pool.New` creates a new connection by using the underlying dial field instead of acquiring an existing connection in the pool. This way can guarantee to get a valid connection in the first retrying unless the background can't serve normally. No matter which way we use to get a connection from the pool, we must close it at the end. `Conn.Close` method tries to put the connection into the pool if there is enough room in which. This step is very critical, so you shouldn't ignore it; Otherwise, no connection will be reused. In fact, even though you don't use any connection pool, closing connections is necessary to prevent resource leak. 
 
-#### Release connections
+#### Release Connections
 
 Have you noticed the statement `conn.(*connpool.Conn).Release()` in the above example?
 
@@ -124,6 +124,35 @@ type element struct {
 ```
 
 The underlying structure of the bucket is the **singly** linked list; the above `element` struct represents the [node][] of which. We use an empty element (`&element{}`) instead of `nil` as the terminator of the linked list; so even if a bucket is empty, its head pointer (`top`) is not nil. You will see the cleanup strategy will benefit from this [sentinel node][].
+
+**Working Set**
+
+If a connection is put to the bucket by using the `bucket.push` method, we can think it has been used recently. **Working Set** is a collection of connections which are used in a period of time. If some connections of a bucket don't belong to the working set, we can reduce the size of the bucket by cleaning up these unused connections. There is a primary question we need to care about:
+
+> How to separate **used** connections and **unused** connections?
+
+We can allocate each element a state bit to indicate whether a connection has been used recently; all state bits are initialized to `false` (*unused*). When a connection is pushed to the bucket, its state bit is set to `true` (*used*). So the corresponding separation process is as follows (*pseudocode*):
+
+```go
+var used_top, unused_top *element
+
+bucket.lock()
+
+// Iterate each element of the bucket (singly linked list).
+for e := range bucket.top {
+    if e.state {
+        add e to used_top
+    } else {
+        add e to unused_top
+    }
+}
+bucket.top = used_top   // Replace bucket.top with used_top
+bucket.unlock()
+
+cleanup(unused_top)     // Cleanup (release) unused connections
+```
+
+It works, but not efficiently. 
 
 ## License 
 
