@@ -1,697 +1,592 @@
 // connpool_test.go
 //
 // Author: blinklv <blinklv@icloud.com>
-// Create Time: 2018-07-11
+// Create Time: 2019-01-18
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-01-10
+// Last Change: 2019-03-22
 
 package connpool
 
 import (
 	"fmt"
-	"github.com/bmizerany/assert"
-	"math/rand"
+	"github.com/stretchr/testify/assert"
+	"log"
 	"net"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
-func TestNewPool(t *testing.T) {
-	elements := []struct {
-		dial     Dial
-		capacity int
-		period   time.Duration
-		ok       bool
-	}{
-		// Correct.
-		{
-			dial: func(address string) (net.Conn, error) {
-				return net.Dial("tcp", address)
-			},
-			capacity: 128,
-			period:   5 * time.Minute,
-			ok:       true,
-		},
-		{
-			dial: func(address string) (net.Conn, error) {
-				return (&dialer{}).Dial(address)
-			},
-			capacity: 128,
-			period:   5 * time.Minute,
-			ok:       true,
-		},
-		{
-			dial: func(address string) (net.Conn, error) {
-				return (&dialer{}).Dial(address)
-			},
-			capacity: 0,
-			period:   5 * time.Minute,
-			ok:       true,
-		},
-		{
-			dial: func(address string) (net.Conn, error) {
-				return (&dialer{}).Dial(address)
-			},
-			capacity: 128,
-			period:   1 * time.Minute,
-			ok:       true,
-		},
+func TestPool(t *testing.T) {
+	t.Run("create/close pool", testCreateAndClosePool)
+	t.Run("pool.new", testPoolNew)
+	if !testing.Short() {
+		t.Run("pool.get", testPoolGet)
+	}
+}
 
-		// Incorrect.
-		{
-			dial:     nil,
-			capacity: 128,
-			period:   3 * time.Minute,
-			ok:       false,
-		},
-		{
-			dial: func(address string) (net.Conn, error) {
-				return (&dialer{}).Dial(address)
-			},
-			capacity: -1,
-			period:   3 * time.Minute,
-			ok:       false,
-		},
-		{
-			dial: func(address string) (net.Conn, error) {
-				return (&dialer{}).Dial(address)
-			},
-			capacity: 128,
-			period:   time.Second,
-			ok:       false,
-		},
+func testCreateAndClosePool(t *testing.T) {
+	dial := func(string) (net.Conn, error) {
+		return nil, nil
 	}
 
-	for _, e := range elements {
+	for _, e := range []struct {
+		dial              Dial
+		capacity          int
+		period            time.Duration
+		createOK, closeOK bool
+	}{
+		{nil, 32, 2 * time.Minute, false, true},
+		{dial, -10, 2 * time.Minute, false, true},
+		{dial, 64, 5 * time.Second, false, true},
+		{dial, 32, 5 * time.Minute, true, true},
+		{dial, 0, 5 * time.Minute, true, true},
+		{dial, 32, 1 * time.Minute, true, true},
+		{dial, 0, 1 * time.Minute, true, true},
+	} {
+		assert, env := assert.New(t), sprintf("[dial:%v capacity:%d period:%s]", e.dial, e.capacity, e.period)
 		pool, err := New(e.dial, e.capacity, e.period)
-		if e.ok {
-			assert.NotEqual(t, (*Pool)(nil), pool)
-			assert.Equal(t, nil, err)
-		} else {
-			t.Logf("new pool failed: %s", err)
-			assert.Equal(t, (*Pool)(nil), pool)
-			assert.NotEqual(t, nil, err)
+		if !e.createOK {
+			assert.NotEqualf(nil, err, "%s creating a pool should be failed", env)
+			t.Logf("%s create a pool failed: %s", env, err)
+			continue
 		}
+		assert.Equalf(nil, err, "%s creating a pool failed: %s", env, err)
+		assert.Equalf(sprintf("%v", e.dial), sprintf("%v", pool.dial), "pool.dial (%v) != dial (%v)", pool.dial, e.dial)
+		assert.Equalf(e.capacity, pool.capacity, "pool.capacity (%d) != capacity (%d)", pool.capacity, e.capacity)
+		assert.Equalf(e.period, pool.period, "pool.period (%v) != period (%v)", pool.period, e.period)
+
+		err = pool.Close()
+		if !e.closeOK {
+			assert.NotEqualf(nil, err, "%s closing the pool should be failed: %s", env, err)
+			t.Logf("%s closing the pool failed: %s", env, err)
+		}
+		assert.Equalf(nil, err, "%s closing the pool failed: %s", env, err)
+
+		// test duplicate shutdown
+		err = pool.Close()
+		assert.NotEqualf(nil, err, "%s closing the pool should be failed: %s", env, err)
+		t.Logf("%s closing the pool failed: %s", env, err)
 	}
 }
 
-func TestPoolNew(t *testing.T) {
-	type address struct {
-		value string
-		count int64
+func testPoolGet(t *testing.T) {
+	_test = true // Runs package in testing mode.
+	defer func() {
+		// Recover the package to normal mode when this function has done.
+		_test = false
+	}()
+
+	addresses := []string{
+		"192.168.1.1:80",
+		"192.168.1.2:80",
+		"192.168.1.3:80",
+		"192.168.1.4:80",
+		"192.168.1.5:80",
+		"192.168.1.6:80",
+		"192.168.1.7:80",
+		"192.168.1.8:80",
+		"192.168.1.9:80",
+		"192.168.1.10:80",
+		"192.168.1.11:80",
+		"192.168.1.12:80",
 	}
 
-	selectAddress := func(addresses []*address) *address {
-		return addresses[int(rand.Int63())%len(addresses)]
-	}
+	var (
+		d       = &dialer{}
+		pool, _ = New(d.dial, 64, time.Second)
+		addr    int64
+	)
 
-	elements := []struct {
-		capacity  int
-		period    time.Duration
-		d         *dialer
-		ws        *workers
-		addresses []*address
-	}{
-		{
-			capacity: 128,
-			period:   3 * time.Minute,
-			d:        &dialer{},
-			ws:       &workers{wn: 1, number: 512},
-			addresses: []*address{
-				{value: "192.168.1.1:80"},
-				{value: "192.168.1.2:80"},
-				{value: "192.168.1.3:80"},
-				{value: "192.168.1.4:80"},
-			},
-		},
-		{
-			capacity: 256,
-			period:   3 * time.Minute,
-			d:        &dialer{},
-			ws:       &workers{wn: 4, number: 512},
-			addresses: []*address{
-				{value: "192.168.1.1:80"},
-				{value: "192.168.1.2:80"},
-				{value: "192.168.1.3:80"},
-				{value: "192.168.1.4:80"},
-				{value: "192.168.1.5:80"},
-				{value: "192.168.1.6:80"},
-			},
-		},
-		{
-			capacity: 512,
-			period:   3 * time.Minute,
-			d:        &dialer{},
-			ws:       &workers{wn: 16, number: 2048},
-			addresses: []*address{
-				{value: "192.168.1.1:80"},
-				{value: "192.168.1.2:80"},
-				{value: "192.168.1.3:80"},
-				{value: "192.168.1.4:80"},
-				{value: "192.168.1.5:80"},
-				{value: "192.168.1.6:80"},
-				{value: "192.168.1.7:80"},
-				{value: "192.168.1.8:80"},
-				{value: "192.168.1.9:80"},
-				{value: "192.168.1.10:80"},
-			},
-		},
-	}
+	assert := assert.New(t)
 
-	for _, e := range elements {
-		e := e
-		pool, _ := New(e.d.Dial, e.capacity, e.period)
-		e.ws.cb = func(i int) error {
-			addr := selectAddress(e.addresses)
-			c, _ := pool.New(addr.value)
-			c.Close()
-			atomic.AddInt64(&addr.count, 1)
-			return nil
-		}
+	for w, n, i, inc := 2, 100, 0, true; i < 100; i++ {
+		var succ, fail int64
 
-		e.ws.initialize()
-		e.ws.run()
-
-		var count, size, actual, idle, total int
-		for _, addr := range e.addresses {
-			b := pool.selectBucket(addr.value)
-			t.Logf("%s (%d) size/actual-size/idle (%d/%d/%d) total (%d)",
-				addr.value, addr.count, b.size, b._size(), b.idle, b.total)
-			count += int(addr.count)
-			size += b.size
-			actual += b._size()
-			idle += int(b.idle)
-			total += int(b.total)
-		}
-
-		t.Logf("%s (%d) size/actual-size/idle (%d/%d/%d) total/dialer-count (%d/%d)",
-			"summary", count, size, actual, idle, total, e.d.count)
-		assert.Equal(t, e.ws.wn*e.ws.number, count)
-		assert.Equal(t, size, actual)
-		assert.Equal(t, size, idle)
-		assert.Equal(t, int(e.d.count), total)
-
-		pool.Close()
-
-		for _, addr := range e.addresses {
-			b := pool.selectBucket(addr.value)
-			assert.Equal(t, 0, b.size)
-			assert.Equal(t, 0, b._size())
-			assert.Equal(t, 0, int(b.idle))
-			assert.Equal(t, 0, int(b.total))
-		}
-		assert.Equal(t, 0, int(e.d.count))
-	}
-}
-
-func TestPoolGet(t *testing.T) {
-	type address struct {
-		value string
-		count int64
-	}
-
-	selectAddress := func(addresses []*address) *address {
-		return addresses[int(rand.Int63())%len(addresses)]
-	}
-
-	elements := []struct {
-		capacity  int
-		period    time.Duration
-		delay     time.Duration
-		d         *dialer
-		ws        *workers
-		addresses []*address
-	}{
-		{
-			capacity: 128,
-			period:   3 * time.Minute,
-			d:        &dialer{},
-			ws:       &workers{wn: 1, number: 512},
-			addresses: []*address{
-				{value: "192.168.1.1:80"},
-				{value: "192.168.1.2:80"},
-				{value: "192.168.1.3:80"},
-				{value: "192.168.1.4:80"},
-			},
-		},
-		{
-			capacity: 128,
-			period:   3 * time.Minute,
-			d:        &dialer{},
-			ws:       &workers{wn: 128, number: 512},
-			addresses: []*address{
-				{value: "192.168.1.1:80"},
-				{value: "192.168.1.2:80"},
-				{value: "192.168.1.3:80"},
-				{value: "192.168.1.4:80"},
-			},
-		},
-		{
-			capacity: 128,
-			period:   3 * time.Minute,
-			d:        &dialer{},
-			ws:       &workers{wn: 256, number: 512},
-			addresses: []*address{
-				{value: "192.168.1.1:80"},
-				{value: "192.168.1.2:80"},
-			},
-		},
-		{
-			capacity: 128,
-			period:   3 * time.Minute,
-			d:        &dialer{},
-			ws:       &workers{wn: 512, number: 1024},
-			addresses: []*address{
-				{value: "192.168.1.1:80"},
-				{value: "192.168.1.2:80"},
-			},
-		},
-		{
-			capacity: 128,
-			period:   3 * time.Minute,
-			delay:    10 * time.Millisecond,
-			d:        &dialer{},
-			ws:       &workers{wn: 512, number: 1024},
-			addresses: []*address{
-				{value: "192.168.1.1:80"},
-				{value: "192.168.1.2:80"},
-				{value: "192.168.1.3:80"},
-				{value: "192.168.1.4:80"},
-				{value: "192.168.1.5:80"},
-				{value: "192.168.1.6:80"},
-				{value: "192.168.1.7:80"},
-				{value: "192.168.1.8:80"},
-				{value: "192.168.1.9:80"},
-				{value: "192.168.1.10:80"},
-			},
-		},
-	}
-
-	for _, e := range elements {
-		e := e
-		pool, _ := New(e.d.Dial, e.capacity, e.period)
-		e.ws.cb = func(i int) error {
-			addr := selectAddress(e.addresses)
-			c, _ := pool.Get(addr.value)
-			if e.delay != 0 {
-				time.Sleep(e.delay)
-			}
-			c.Close()
-			atomic.AddInt64(&addr.count, 1)
-			return nil
-		}
-
-		e.ws.initialize()
-		e.ws.run()
-
-		var count, size, actual, idle, total int
-		for _, addr := range e.addresses {
-			b := pool.selectBucket(addr.value)
-			t.Logf("%s (%d) size/actual-size/idle (%d/%d/%d) total (%d)",
-				addr.value, addr.count, b.size, b._size(), b.idle, b.total)
-			count += int(addr.count)
-			size += b.size
-			actual += b._size()
-			idle += int(b.idle)
-			total += int(b.total)
-		}
-
-		t.Logf("%s (%d) size/actual-size/idle (%d/%d/%d) total/dialer-count (%d/%d)",
-			"summary", count, size, actual, idle, total, e.d.count)
-		assert.Equal(t, e.ws.wn*e.ws.number, count)
-		assert.Equal(t, size, actual)
-		assert.Equal(t, size, idle)
-		assert.Equal(t, int(e.d.count), total)
-
-		pool.Close()
-
-		for _, addr := range e.addresses {
-			b := pool.selectBucket(addr.value)
-			assert.Equal(t, 0, b.size)
-			assert.Equal(t, 0, b._size())
-			assert.Equal(t, 0, int(b.idle))
-			assert.Equal(t, 0, int(b.total))
-		}
-		assert.Equal(t, 0, int(e.d.count))
-	}
-}
-
-func TestBucketPush(t *testing.T) {
-	elements := []struct {
-		b         *bucket
-		ws        *workers
-		success   int64
-		full      int64
-		closed    int64
-		threshold int
-		d         *dialer
-	}{
-		{
-			b:         &bucket{capacity: 128},
-			ws:        &workers{wn: 1, number: 256},
-			threshold: 256,
-			d:         &dialer{},
-		},
-		{
-			b:         &bucket{capacity: 256},
-			ws:        &workers{wn: 4, number: 1024},
-			threshold: 1024,
-			d:         &dialer{},
-		},
-		{
-			b:         &bucket{capacity: 256},
-			ws:        &workers{wn: 4, number: 1024},
-			threshold: 512,
-			d:         &dialer{},
-		},
-		{
-			b:         &bucket{capacity: 512},
-			ws:        &workers{wn: 16, number: 4096},
-			threshold: 1024,
-			d:         &dialer{},
-		},
-	}
-
-	for _, e := range elements {
-		e := e
-		e.ws.cb = func(i int) error {
-			conn, _ := e.d.Dial("192.168.1.100:80")
-			c := &Conn{Conn: conn, b: e.b}
-
-			if i == e.threshold+1 {
-				e.b._close()
-			}
-
-			switch e.b.push(c) {
-			case nil:
-				atomic.AddInt64(&e.success, 1)
-			case bucketIsFull:
-				atomic.AddInt64(&e.full, 1)
-			case bucketIsClosed:
-				atomic.AddInt64(&e.closed, 1)
-			default:
-			}
-
-			return nil
-		}
-
-		e.ws.initialize()
-		e.ws.run()
-
-		total := e.ws.wn * e.ws.number
-		t.Logf("bucket push: total (%d) success (%d) full (%d) closed (%d)",
-			total, e.success, e.full, e.closed)
-
-		assert.Equal(t, int(total), int(e.success+e.full+e.closed))
-		assert.Equal(t, e.b.size, e.b._size())
-		if e.ws.number <= e.threshold {
-			assert.Equal(t, int(e.full), total-e.b.size)
-		} else {
-			assert.Equal(t, true, int(e.closed) > e.ws.number-e.threshold)
-		}
-	}
-}
-
-func TestBucketPop(t *testing.T) {
-	elements := []struct {
-		b         *bucket
-		ws        *workers
-		success   int64
-		fail      int64
-		threshold int
-		d         *dialer
-	}{
-		{
-			b:         &bucket{capacity: 128},
-			ws:        &workers{wn: 1, number: 256},
-			threshold: 256,
-			d:         &dialer{},
-		},
-		{
-			b:         &bucket{capacity: 256},
-			ws:        &workers{wn: 4, number: 1024},
-			threshold: 1024,
-			d:         &dialer{},
-		},
-		{
-			b:         &bucket{capacity: 512},
-			ws:        &workers{wn: 4, number: 1024},
-			threshold: 256,
-			d:         &dialer{},
-		},
-		{
-			b:         &bucket{capacity: 1024},
-			ws:        &workers{wn: 16, number: 4096},
-			threshold: 512,
-			d:         &dialer{},
-		},
-	}
-
-	for _, e := range elements {
-		e := e
-		bucketFill(e.b, &dialer{})
-		e.ws.cb = func(i int) error {
-			if i == e.threshold+1 {
-				e.b._close()
-			}
-
-			if e.b.pop() != nil {
-				atomic.AddInt64(&e.success, 1)
+		execute(w, n, func() {
+			conn, err := pool.Get(addresses[int(atomic.AddInt64(&addr, 1))%len(addresses)])
+			if err == nil {
+				atomic.AddInt64(&succ, 1)
 			} else {
-				atomic.AddInt64(&e.fail, 1)
+				atomic.AddInt64(&fail, 1)
 			}
-			return nil
+			conn.Close()
+		})
+
+		back := <-pool._interrupt
+		env := sprintf("%d dial:%d worker:%d number:%d rest:%d pool-size:%d", i, d.total, w, n, d.count, pool._size())
+
+		logf("%s\n%s\n", env, stats2str(pool.Stats()))
+		assert.Equalf(n, int(succ), "%s success:%d != number:%d", env, succ, n)
+		assert.Equalf(0, int(fail), "%s fail:%d is not zero", env, fail)
+		assert.Equalf(int(d.count), pool._size(), "%s rest:%d != pool-size:%d", env, d.count, pool._size())
+		for _, b := range pool.buckets {
+			assert.Equalf(b.size, b._size(), "%s bucket.size:%d != bucket._size:%d", env, b.size, b._size())
+			assert.Equalf(b.size, int(b.idle), "%s bucket.size:%d != bucket.idle:%d", env, b.size, b.idle)
+			assert.Equalf(b._depth(), b.depth, "%s bucket._depth:%d != bucket.depth:%d", env, b._depth(), b.depth)
 		}
 
-		e.ws.initialize()
-		e.ws.run()
+		close(back)
 
-		total := e.ws.wn * e.ws.number
-		t.Logf("bucket pop: total (%d) success (%d) fail (%d)",
-			total, e.success, e.fail)
+		if w <= 2 || n <= 100 {
+			inc = true
+		} else if w >= 2048 || n >= 100000 {
+			inc = false
+		}
 
-		assert.Equal(t, int(total), int(e.success+e.fail))
-		assert.Equal(t, e.b.size, e.b._size())
-		if e.ws.number <= e.threshold {
-			assert.Equal(t, e.b.capacity, int(e.success))
+		if inc {
+			w, n = w*2, n*2
 		} else {
-			assert.Equal(t, true, int(e.fail) > e.ws.number-e.threshold)
+			w, n = w/2, n/2
 		}
 	}
+
+	pool.Close()
+	assert.Equalf(0, pool._size(), "pool-size:%d is not zero after closing", pool._size())
+	assert.Equalf(0, int(d.count), "rest:%d is not zero after closing", d.count)
 }
 
-func TestBucketCleanup(t *testing.T) {
-	type element struct {
-		t  *testing.T
-		b  *bucket
-		cb func(e *element) error
-		d  *dialer
-		*boolgen
-		interruptNumber int
-		pushNumber      int
-		popNumber       int
-	}
-	elements := []*element{
-		&element{
-			t: t,
-			b: &bucket{
-				capacity:  256,
-				interrupt: make(chan chan struct{}),
-			},
-			d: &dialer{},
-			cb: func(e *element) error {
-				e.interruptNumber++
-				return nil
-			},
-		},
-		&element{
-			t: t,
-			b: &bucket{
-				capacity:  512,
-				interrupt: make(chan chan struct{}),
-			},
-			d: &dialer{},
-			cb: func(e *element) error {
-				e.interruptNumber++
-				e.pushNumber += bucketPush(e.b, e.d, 4)
-				return nil
-			},
-		},
-		&element{
-			t: t,
-			b: &bucket{
-				capacity:  1024,
-				interrupt: make(chan chan struct{}),
-			},
-			d: &dialer{},
-			cb: func(e *element) error {
-				e.interruptNumber++
-				e.popNumber += bucketPop(e.b, 4)
-				return nil
-			},
-		},
-		&element{
-			t: t,
-			b: &bucket{
-				capacity:  1024,
-				interrupt: make(chan chan struct{}),
-			},
-			d:       &dialer{},
-			boolgen: newBoolgen(),
-			cb: func(e *element) error {
-				e.interruptNumber++
-				if e.boolgen.Bool() {
-					e.pushNumber += bucketPush(e.b, e.d, 6)
-				} else {
-					e.popNumber += bucketPop(e.b, 7)
-				}
-				return nil
-			},
-		},
-		&element{
-			t: t,
-			b: &bucket{
-				capacity:  512,
-				interrupt: make(chan chan struct{}),
-			},
-			d:       &dialer{},
-			boolgen: newBoolgen(),
-			cb: func(e *element) error {
-				e.interruptNumber++
-				if e.boolgen.Bool() {
-					e.pushNumber += bucketPush(e.b, e.d, 16)
-				} else {
-					e.popNumber += bucketPop(e.b, 4)
-				}
-				return nil
-			},
-		},
-		// Trivial case (zero capacity).
-		&element{
-			t: t,
-			b: &bucket{
-				capacity:  0,
-				interrupt: make(chan chan struct{}),
-			},
-			d:       &dialer{},
-			boolgen: newBoolgen(),
-			cb: func(e *element) error {
-				e.interruptNumber++
-				if e.boolgen.Bool() {
-					e.pushNumber += bucketPush(e.b, e.d, 16)
-				} else {
-					e.popNumber += bucketPop(e.b, 4)
-				}
-				return nil
-			},
-		},
+func testPoolNew(t *testing.T) {
+	addresses := []string{
+		"192.168.1.1:80",
+		"192.168.1.2:80",
+		"192.168.1.3:80",
+		"192.168.1.4:80",
+		"192.168.1.5:80",
+		"192.168.1.6:80",
+		"192.168.1.7:80",
+		"192.168.1.8:80",
+		"192.168.1.9:80",
+		"192.168.1.10:80",
+		"192.168.1.11:80",
+		"192.168.1.12:80",
 	}
 
-	for _, e := range elements {
+	for _, e := range []struct {
+		capacity int
+		n        int
+	}{
+		{8, 1000},
+		{16, 1000},
+		{32, 2000},
+		{64, 10000},
+		{128, 10000},
+	} {
+
 		var (
-			e         = e
-			unused    = 0
-			cleanDone = make(chan struct{})
+			d                = &dialer{}
+			pool, _          = New(d.dial, e.capacity, time.Hour)
+			addr, succ, fail int64
+			env              = sprintf("[capacity:%d number:%d]", e.capacity, e.n)
+			assert           = assert.New(t)
 		)
 
-		bucketFill(e.b, e.d)
+		execute(64, e.n, func() {
+			conn, err := pool.New(addresses[int(atomic.AddInt64(&addr, 1))%len(addresses)])
+			if err == nil {
+				atomic.AddInt64(&succ, 1)
+			} else {
+				atomic.AddInt64(&fail, 1)
+			}
+			conn.Close()
+		})
+
+		t.Logf("%s dial:%d rest:%d pool-size:%d\n%s\n", env, d.total, d.count, pool._size(), stats2str(pool.Stats()))
+		assert.Equalf(e.n, int(succ), "%s success:%d != number:%d", env, succ, e.n)
+		assert.Equalf(0, int(fail), "%s fail:%d is not zero", env, fail)
+		assert.Equalf(int(d.count), pool._size(), "%s rest:%d != pool-size:%d", env, d.count, pool._size())
+		assert.Equalf(len(addresses)*e.capacity, pool._size(), "pool._size:%d is not correct", env, pool._size())
+		assert.Equalf(e.n, int(d.total), "%s number:%d != dial-total:%d", env, e.n, d.total)
+		for _, b := range pool.buckets {
+			assert.Equalf(0, b.depth, "%s bucket.depth:%d is not zero", env, b.depth)
+			assert.Equalf(b._depth(), b.depth, "%s bucket._depth:%d != bucket.depth:%d", env, b._depth(), b.depth)
+		}
+
+		pool.Close()
+		assert.Equalf(0, pool._size(), "pool-size:%d is not zero after closing", pool._size())
+		assert.Equalf(0, int(d.count), "rest:%d is not zero after closing", d.count)
+	}
+}
+
+func TestBucket(t *testing.T) {
+	t.Run("bucket.push", testBucketPush)
+	t.Run("(closed) bucket.push", testClosedBucketPush)
+	t.Run("bucket.pop", testBucketPop)
+	t.Run("(closed) bucket.pop", testClosedBucketPop)
+	t.Run("bucket.push/pop", testBucketPushAndPop)
+	t.Run("bucket.cleanup", testBucketCleanup)
+}
+
+func testBucketPush(t *testing.T) {
+	for _, e := range []struct {
+		b *bucket
+		n int
+	}{
+		{b: &bucket{capacity: 0, top: &element{}}, n: 4096},
+		{b: &bucket{capacity: 1, top: &element{}}, n: 4096},
+		{b: &bucket{capacity: 2048, top: &element{}}, n: 4096},
+		{b: &bucket{capacity: 4096, top: &element{}}, n: 4096},
+		{b: &bucket{capacity: 8192, top: &element{}}, n: 4096},
+	} {
+		var (
+			d          = &dialer{}
+			succ, fail int64
+		)
+
+		execute(16, e.n, func() {
+			conn, _ := d.dial("192.168.1.1:80")
+			c := e.b.bind(conn)
+			if e.b.push(c) {
+				atomic.AddInt64(&succ, 1)
+			} else {
+				atomic.AddInt64(&fail, 1)
+				c.Release()
+			}
+		})
+
+		assert, env := assert.New(t), sprintf("[capacity:%d number:%d]", e.b.capacity, e.n)
+		assert.Equalf(e.n, int(succ+fail), "%s total:%d != succ:%d + fail:%d", env, e.n, succ, fail)
+		assert.Equalf(min(e.b.capacity, e.n), int(succ), "%s min(capacity:%d, number:%d) != succ:%d", env, e.b.capacity, e.n, succ)
+		assert.Equalf(max(e.n-e.b.capacity, 0), int(fail), "%s max(number:%d - capacity:%d, 0) != fail:%d", env, e.n, e.b.capacity, fail)
+		assert.Equalf(e.b.size, int(succ), "%s bucket.size:%d != succ:%d", env, e.b.size, succ)
+		assert.Equalf(e.b.size, e.b._size(), "%s bucket.size:%d != bucket._size:%d", env, e.b.size, e.b._size())
+		assert.Equalf(e.b.total, succ, "%s bucket.total:%d != succ:%d", env, e.b.total, succ)
+		assert.Equalf(e.b.idle, succ, "%s bucket.idle:%d != succ:%d", env, e.b.idle, succ)
+		assert.Equalf(e.b.depth, 0, "%s bucket.depth:%d != 0", env, e.b.depth)
+		assert.Equalf(e.b._depth(), e.b.depth, "%s bucket._depth:%d != bucket.depth:%d", env, e.b._depth(), e.b.depth)
+		assert.Equalf((*element)(nil), e.b.cut, "%s bucket.cut:%v != nil", env, e.b.cut)
+	}
+}
+
+func testClosedBucketPush(t *testing.T) {
+	for _, e := range []struct {
+		b *bucket
+		n int
+	}{
+		{b: &bucket{capacity: 0, top: &element{}, closed: true}, n: 10000},
+		{b: &bucket{capacity: 1, top: &element{}, closed: true}, n: 10000},
+		{b: &bucket{capacity: 2048, top: &element{}, closed: true}, n: 10000},
+		{b: &bucket{capacity: 4096, top: &element{}, closed: true}, n: 10000},
+		{b: &bucket{capacity: 8192, top: &element{}, closed: true}, n: 10000},
+	} {
+		var (
+			d          = &dialer{}
+			succ, fail int64
+		)
+
+		execute(16, e.n, func() {
+			conn, _ := d.dial("192.168.1.1:80")
+			c := e.b.bind(conn)
+			if e.b.push(c) {
+				atomic.AddInt64(&succ, 1)
+			} else {
+				atomic.AddInt64(&fail, 1)
+				c.Release()
+			}
+		})
+
+		assert, env := assert.New(t), sprintf("[capacity:%d number:%d closed:true]", e.b.capacity, e.n)
+		assert.Equalf(e.n, int(succ+fail), "%s total:%d != succ:%d + fail:%d", env, e.n, succ, fail)
+		assert.Equalf(0, int(succ), "%s 0 != succ:%d", env, succ)
+		assert.Equalf(e.n, int(fail), "%s number:%d != fail:%d", env, e.n, fail)
+		assert.Equalf(0, e.b.size, "%s bucket.size:%d != 0", env, e.b.size)
+		assert.Equalf(0, e.b._size(), "%s bucket._size:%d != 0", env, e.b._size())
+		assert.Equalf(0, int(e.b.total), "%s bucket.total:%d != 0", env, e.b.total)
+		assert.Equalf(0, int(e.b.idle), "%s bucket.idle:%d != 0", env, e.b.idle)
+		assert.Equalf(0, e.b.depth, "%s bucket.depth:%d != 0", env, e.b.depth)
+		assert.Equalf(e.b._depth(), e.b.depth, "%s bucket._depth:%d != bucket.depth:%d", env, e.b._depth(), e.b.depth)
+		assert.Equalf((*element)(nil), e.b.cut, "%s bucket.cut:%v != nil", env, e.b.cut)
+	}
+}
+
+func testBucketPop(t *testing.T) {
+	for _, e := range []struct {
+		b *bucket
+		n int
+	}{
+		{b: &bucket{capacity: 0, top: &element{}}, n: 4096},
+		{b: &bucket{capacity: 1, top: &element{}}, n: 4096},
+		{b: &bucket{capacity: 2048, top: &element{}}, n: 4096},
+		{b: &bucket{capacity: 4096, top: &element{}}, n: 4096},
+		{b: &bucket{capacity: 8192, top: &element{}}, n: 4096},
+	} {
+		var (
+			d          = &dialer{}
+			succ, fail int64
+		)
+
+		for i := 0; i < e.b.capacity; i++ {
+			conn, _ := d.dial("192.168.1.1:80")
+			e.b.push(e.b.bind(conn))
+		}
+
+		execute(16, e.n, func() {
+			if e.b.pop() != nil {
+				atomic.AddInt64(&succ, 1)
+			} else {
+				atomic.AddInt64(&fail, 1)
+			}
+		})
+
+		assert, env := assert.New(t), sprintf("[capacity:%d number:%d]", e.b.capacity, e.n)
+		assert.Equalf(e.n, int(succ+fail), "%s total:%d != succ:%d + fail:%d", env, e.n, succ, fail)
+		assert.Equalf(min(e.b.capacity, e.n), int(succ), "%s min(capacity:%d, number:%d) != succ:%d", env, e.b.capacity, e.n, succ)
+		assert.Equalf(max(e.n-e.b.capacity, 0), int(fail), "%s max(number:%d - capacity:%d, 0) != fail:%d", env, e.n, e.b.capacity, fail)
+		assert.Equalf(max(e.b.capacity-e.n, 0), e.b.size, "%s max(capacity:%d - number:%d, 0), bucket.size:%d", env, e.b.capacity, e.n, e.b.size)
+		assert.Equalf(e.b.size, e.b._size(), "%s bucket.size:%d != bucket._size:%d", env, e.b.size, e.b._size())
+		assert.Equalf(e.b.size, int(e.b.idle), "%s bucket.size:%d != bucket.idle:%d", env, e.b.size, e.b.idle)
+		assert.Equalf(0, e.b.depth, "%s bucket.depth:%d != 0", env, e.b.depth)
+		assert.Equalf(e.b._depth(), e.b.depth, "%s bucket._depth:%d != bucket.depth:%d", env, e.b._depth(), e.b.depth)
+
+		if e.b.size == 0 {
+			assert.Equalf(element{}, *(e.b.top), "%s bucket.top:%v is not empty", env, e.b.top)
+		}
+
+		if e.b.capacity != 0 {
+			assert.Equalf(e.b.top, e.b.cut, "%s bucket.cut:%v != bucket.top:%v", env, e.b.cut, e.b.top)
+		}
+
+		succ = 0
+		execute(16, e.b.capacity, func() {
+			conn, _ := d.dial("192.168.1.1:80")
+			if e.b.push(e.b.bind(conn)) {
+				atomic.AddInt64(&succ, 1)
+			}
+		})
+
+		assert.Equalf(e.b.capacity, e.b.size, "%s bucket.size:%d != bucket.capacity:%d", env, e.b.capacity, e.b.size)
+		assert.Equalf(int(succ), e.b.depth, "%s bucket.depth:%d != bucket.size:%d", env, e.b.depth, e.b.size)
+		assert.Equalf(e.b._depth(), e.b.depth, "%s bucket._depth:%d != bucket.depth:%d", env, e.b._depth(), e.b.depth)
+	}
+}
+
+func testClosedBucketPop(t *testing.T) {
+	for _, e := range []struct {
+		b *bucket
+		n int
+	}{
+		{b: &bucket{capacity: 0, top: &element{}}, n: 4096},
+		{b: &bucket{capacity: 1, top: &element{}}, n: 4096},
+		{b: &bucket{capacity: 2048, top: &element{}}, n: 4096},
+		{b: &bucket{capacity: 4096, top: &element{}}, n: 4096},
+		{b: &bucket{capacity: 8192, top: &element{}}, n: 4096},
+	} {
+		var (
+			d          = &dialer{}
+			succ, fail int64
+		)
+
+		for i := 0; i < e.b.capacity; i++ {
+			conn, _ := d.dial("192.168.1.1:80")
+			e.b.push(e.b.bind(conn))
+		}
+		e.b._close() // close the bucket.
+
+		execute(16, e.n, func() {
+			if e.b.pop() != nil {
+				atomic.AddInt64(&succ, 1)
+			} else {
+				atomic.AddInt64(&fail, 1)
+			}
+		})
+
+		assert, env := assert.New(t), sprintf("[capacity:%d number:%d closed:true]", e.b.capacity, e.n)
+		assert.Equalf(0, int(succ), "%s 0 != succ:%d", env, succ)
+		assert.Equalf(e.n, int(fail), "%s number:%d != fail:%d", env, e.n, fail)
+		assert.Equalf(e.b.capacity, e.b.size, "%s bucket.capacity:%d != bucket.size:%d", env, e.b.capacity, e.b.size)
+		assert.Equalf(e.b.size, e.b._size(), "%s bucket.size:%d != bucket._size:%d", env, e.b.size, e.b._size())
+		assert.Equalf(e.b.size, int(e.b.idle), "%s bucket.size:%d != bucket._idle:%d", env, e.b.size, e.b.idle)
+		assert.Equalf(0, e.b.depth, "%s bucket.depth:%d is not zero", env, e.b.depth)
+		assert.Equalf(e.b._depth(), e.b.depth, "%s bucket._depth:%d != bucket.depth:%d", env, e.b._depth(), e.b.depth)
+		assert.Equalf((*element)(nil), e.b.cut, "%s bucket.cut:%v is not nil", env, e.b.cut)
+	}
+}
+
+func testBucketPushAndPop(t *testing.T) {
+	for _, e := range []struct {
+		b     *bucket
+		pushn int
+		popn  int
+	}{
+		{b: &bucket{capacity: 0, top: &element{}}, pushn: 4096, popn: 4096},
+		{b: &bucket{capacity: 1, top: &element{}}, pushn: 4096, popn: 4096},
+		{b: &bucket{capacity: 2048, top: &element{}}, pushn: 4096, popn: 4096},
+		{b: &bucket{capacity: 4096, top: &element{}}, pushn: 4096, popn: 4096},
+		{b: &bucket{capacity: 4096, top: &element{}}, pushn: 8192, popn: 4096},
+		{b: &bucket{capacity: 4096, top: &element{}}, pushn: 4096, popn: 8192},
+		{b: &bucket{capacity: 8192, top: &element{}}, pushn: 4096, popn: 4096},
+		{b: &bucket{capacity: 8192, top: &element{}}, pushn: 4096, popn: 8192},
+		{b: &bucket{capacity: 8192, top: &element{}}, pushn: 100000, popn: 100000},
+	} {
+		var (
+			d                  = &dialer{}
+			wg                 sync.WaitGroup
+			pushSucc, pushFail int64
+			popSucc, popFail   int64
+		)
+
+		wg.Add(1)
 		go func() {
-			unused = e.b.cleanup(false)
-			close(cleanDone)
+			execute(16, e.pushn, func() {
+				conn, _ := d.dial("192.168.1.1:80")
+				c := e.b.bind(conn)
+				if e.b.push(c) {
+					atomic.AddInt64(&pushSucc, 1)
+				} else {
+					atomic.AddInt64(&pushFail, 1)
+					c.Release()
+				}
+			})
+			wg.Done()
 		}()
 
-		for done := range e.b.interrupt {
-			e.cb(e)
-			close(done)
+		wg.Add(1)
+		go func() {
+			execute(16, e.popn, func() {
+				if c := e.b.pop(); c != nil {
+					atomic.AddInt64(&popSucc, 1)
+				} else {
+					atomic.AddInt64(&popFail, 1)
+				}
+			})
+			wg.Done()
+		}()
+		wg.Wait()
+
+		t.Logf("push (succ:%d/fail:%d) pop (succ:%d/fail:%d) bucket.size:%d bucket.depth:%d", pushSucc, pushFail, popSucc, popFail, e.b.size, e.b.depth)
+
+		assert, env := assert.New(t), sprintf("[capacity:%d push-number:%d pop-number:%d]", e.b.capacity, e.pushn, e.popn)
+		assert.Equalf(e.pushn, int(pushSucc+pushFail), "%s push-number:%d != push-succ:%d + push-fail:%d", env, e.pushn, pushSucc, pushFail)
+		assert.Equalf(e.popn, int(popSucc+popFail), "%s pop-number:%d != pop-succ:%d + pop-fail:%d", env, e.popn, popSucc, popFail)
+		assert.Equalf(max(int(pushSucc-popSucc), 0), e.b.size, "%s max(push-succ:%d - pop-succ:%d, 0) != bucket.size:%d", env, pushSucc, popSucc, e.b.size)
+		assert.Equalf(e.b.size, e.b._size(), "%s bucket.size:%d != bucket._size:%d", env, e.b.size, e.b._size())
+		assert.Equalf(e.b.size, int(e.b.idle), "%s bucket.size:%d != bucket.idle:%d", env, e.b.size, e.b.idle)
+		assert.Equalf(e.b._depth(), e.b.depth, "%s bucket._depth:%d != bucket.depth:%d", env, e.b._depth(), e.b.depth)
+
+		if e.b.depth != 0 && e.b.depth == e.b.size {
+			assert.NotEqualf((*element)(nil), e.b.cut, "%s bucket.cut:%v is nil", env, e.b.cut)
+			assert.Equalf((*Conn)(nil), e.b.cut.conn, "%s bucket.cut.conn:%v != nil", env, e.b.cut.conn)
+			assert.Equalf((*element)(nil), e.b.cut.next, "%s bucket.cut.next:%v != nil", env, e.b.cut.next)
 		}
-		<-cleanDone
-
-		e.t.Logf("size/actual-size/idle (%d/%d/%d)  push/pop/unused (%d/%d/%d) total/dialer-count(%d/%d)",
-			e.b.size, e.b._size(), e.b.idle,
-			e.pushNumber, e.popNumber, unused,
-			e.b.total, e.d.count)
-
-		assert.Equal(t, e.b.size, e.b._size())
-		assert.Equal(t, e.b.size, int(e.b.idle))
-		assert.Equal(t, e.b.total, e.d.count)
-		assert.Equal(t, int(e.b.total)-e.b.capacity, e.pushNumber-(e.popNumber+unused))
-
-		size := e.b.size
-		unused = e.b.cleanup(true)
-		assert.Equal(t, 0, int(e.d.count))
-		assert.Equal(t, size, unused)
 	}
 }
 
-func TestBucketCleanupEx(t *testing.T) {
-	elements := []struct {
-		b *bucket
-		d *dialer
+func testBucketCleanup(t *testing.T) {
+	for _, e := range []struct {
+		b        *bucket
+		part     int
+		shutdown bool
+		use      bool
 	}{
-		{
-			b: &bucket{capacity: 256},
-			d: &dialer{},
-		},
-		{
-			b: &bucket{capacity: 1024},
-			d: &dialer{},
-		},
-		{
-			b: &bucket{capacity: 2048},
-			d: &dialer{},
-		},
-		{
-			b: &bucket{capacity: 4096},
-			d: &dialer{},
-		},
-		{
-			b: &bucket{capacity: 10000},
-			d: &dialer{},
-		},
-	}
+		{b: &bucket{capacity: 1024, top: &element{}}, part: 128, shutdown: false, use: true},
+		{b: &bucket{capacity: 1024, top: &element{}}, part: 127, shutdown: false, use: true},
+		{b: &bucket{capacity: 4096, top: &element{}}, part: 77, shutdown: false, use: true},
+		{b: &bucket{capacity: 8192, top: &element{}}, part: 77, shutdown: false, use: true},
+		{b: &bucket{capacity: 8192, top: &element{}}, part: 77, shutdown: false, use: false},
+		{b: &bucket{capacity: 1024, top: &element{}}, part: 127, shutdown: true, use: true},
+		{b: &bucket{capacity: 4096, top: &element{}}, part: 77, shutdown: true, use: true},
+	} {
+		var (
+			d = &dialer{}
+			b = &bucket{capacity: e.b.capacity, top: &element{}} // cache.
+		)
 
-	for _, e := range elements {
-		_, expectedUnused := bucketRandomPush(e.b, e.d, e.b.capacity)
-		assert.Equal(t, true, checkOrder(e.b, false))
-		unused := e.b.cleanup(false)
-		t.Logf("expected/actual unused (%d/%d) size/actual-size (%d/%d)",
-			expectedUnused, unused, e.b.size, e.b._size())
-		assert.Equal(t, e.b.capacity, e.b.size+unused)
-		assert.Equal(t, expectedUnused, unused)
-		assert.Equal(t, true, checkOrder(e.b, true))
-	}
-}
+		execute(16, e.b.capacity, func() {
+			conn, _ := d.dial("192.168.1.1:80")
+			c := e.b.bind(conn)
+			e.b.push(c)
+		})
 
-func checkOrder(b *bucket, asc bool) bool {
-	var prev int
+		assert, env := assert.New(t), sprintf("[capacity:%d part:%d shutdown:%v]",
+			e.b.capacity, e.part, e.shutdown)
 
-	if !asc {
-		// descending order.
-		prev = b.capacity + 1
-	}
+		for lastRest, rest := 0, e.b.capacity; rest > 0; {
+			lastRest, rest = rest, max(0, rest-e.part)
 
-	for top := b.top; top != nil; top = top.next {
-		current := top.conn.Conn.(*connection).index
-		if asc && current < prev {
-			return false
-		} else if !asc && current > prev {
-			return false
+			if e.use {
+				execute(16, rest, func() { b.push(e.b.pop()) })
+				execute(16, rest, func() { b.pop().Close() })
+			}
+
+			unused := e.b.cleanup(e.shutdown)
+
+			if !e.shutdown && e.use {
+				t.Logf("%s last_rest:%d rest:%d unused:%d bucket.size:%d", env, lastRest, rest, unused, e.b.size)
+				assert.Equalf(lastRest-rest, unused, "%s last_rest:%d - rest:%d != unused:%d", env, lastRest, rest, unused)
+				assert.Equalf(rest, e.b.size, "%s rest:%d != bucket.size:%d", env, rest, e.b.size)
+				assert.Equalf(e.b.size, int(e.b.idle), "%s bucket.size:%d != bucket.idle:%d", env, e.b.size, e.b.idle)
+				assert.Equalf(rest, int(d.count), "%s rest:%d != release:%d", env, rest, d.count)
+				assert.NotEqualf((*element)(nil), b.top, "%s bucket.top is nil", env)
+				assert.Equalf(e.b._depth(), e.b.depth, "%s bucket._depth:%d != bucket.depth:%d", env, e.b._depth(), e.b.depth)
+			} else {
+				assert.Equalf(0, e.b.size, "%s bucket.size:%d != 0", env, e.b.size)
+				assert.Equalf(0, int(e.b.idle), "%s bucket.idle:%d != 0", env, e.b.idle)
+				assert.Equalf(0, int(d.count), "%s release:%d != 0", env, d.count)
+				assert.NotEqualf((*element)(nil), b.top, "%s bucket.top is nil", env)
+				break
+			}
 		}
-		prev = current
 	}
-	return true
 }
 
-// This is an auxiliary connection type to print some operation information.
-// It satisfies net.Conn interface (But it doesn't satisfy all requirements
-// in comments of each method).
+// Returns the readable form of a pool's statistical data.
+func stats2str(s *Stats) string {
+	sort.Sort(destinations(s.Destinations))
+	strs, total, idle := make([]string, len(s.Destinations)+2), int64(0), int64(0)
+	strs[0] = (time.Unix(s.Timestamp, 0)).String()
+	for i, d := range s.Destinations {
+		strs[i+2] = sprintf("%-24s total: %-6d idle: %d", d.Address, d.Total, d.Idle)
+		total, idle = total+d.Total, idle+d.Idle
+	}
+	strs[1] = sprintf("%-24s total: %-6d idle: %d", "all", total, idle)
+	return strings.Join(strs, "\n")
+}
+
+// Executing a callback function n times in multiple goroutines simultaneously.
+func execute(parallel, n int, cb func()) {
+	var wg = &sync.WaitGroup{}
+	for pn := max(n/parallel, 1); n > 0; n -= pn {
+		m := min(pn, n)
+		wg.Add(1)
+		go func(m int) {
+			for i := 0; i < m; i++ {
+				cb()
+			}
+			wg.Done()
+		}(m)
+	}
+	wg.Wait()
+}
+
+type dialer struct {
+	port  int32
+	count int64
+	total int64
+}
+
+func (d *dialer) dial(address string) (net.Conn, error) {
+	c := &connection{
+		d:      d,
+		local:  resolveTCPAddr(sprintf("127.0.0.1:%d", atomic.AddInt32(&d.port, 1))),
+		remote: resolveTCPAddr(address),
+	}
+	atomic.AddInt64(&d.count, 1)
+	atomic.AddInt64(&d.total, 1)
+	return c, nil
+}
+
+func resolveTCPAddr(s string) net.Addr {
+	addr, _ := net.ResolveTCPAddr("tcp", s)
+	return addr
+}
+
+// connection is an auxiliary struct which satisfies the net.Conn interface.
 type connection struct {
-	d      *dialer
-	local  net.Addr
-	remote net.Addr
-	index  int
+	d             *dialer
+	local, remote net.Addr
 }
 
 func (c *connection) Read(b []byte) (int, error) {
@@ -727,131 +622,39 @@ func (c *connection) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
-type dialer struct {
-	localPort int32
-	count     int64
+// Satisfy sort.Interface to sort multiple DestinationsStats structs.
+type destinations []DestinationStats
+
+func (ds destinations) Len() int {
+	return len(ds)
 }
 
-func (d *dialer) Dial(address string) (net.Conn, error) {
-	c := &connection{d: d}
-	c.index = int(atomic.AddInt32(&d.localPort, 1))
-	c.local, _ = net.ResolveTCPAddr("tcp", fmt.Sprintf("127.0.0.1:%d", c.index))
-	c.remote, _ = net.ResolveTCPAddr("tcp", address)
-	atomic.AddInt64(&d.count, 1)
-	return c, nil
+func (ds destinations) Less(i, j int) bool {
+	return strings.Compare(ds[i].Address, ds[j].Address) < 0
 }
 
-type worker struct {
-	number int
-	cb     func(int) error
+func (ds destinations) Swap(i, j int) {
+	ds[i], ds[j] = ds[j], ds[i]
 }
 
-func (w *worker) run(wg *sync.WaitGroup) error {
-	defer wg.Done()
-	for i := 0; i < w.number; i++ {
-		if err := w.cb(i); err != nil {
-			return err
-		}
+func min(a, b int) int {
+	if a < b {
+		return a
 	}
-	return nil
+	return b
 }
 
-type workers struct {
-	wn     int
-	number int
-	cb     func(int) error
-
-	ws []*worker
-	wg *sync.WaitGroup
-}
-
-func (ws *workers) initialize() {
-	ws.ws = make([]*worker, ws.wn)
-	ws.wg = &sync.WaitGroup{}
-
-	for i := 0; i < ws.wn; i++ {
-		ws.ws[i] = &worker{ws.number, ws.cb}
+func max(a, b int) int {
+	if a > b {
+		return a
 	}
+	return b
 }
 
-func (ws *workers) run() {
-	for _, w := range ws.ws {
-		w := w
-		ws.wg.Add(1)
-		go w.run(ws.wg)
+var sprintf = fmt.Sprintf
+
+func logf(format string, args ...interface{}) {
+	if testing.Verbose() {
+		log.Printf(format, args...)
 	}
-	ws.wg.Wait()
-}
-
-// 'number' is the expected number of pushing operations, and return value
-// is the actual number of pushing operations.
-func bucketPush(b *bucket, d *dialer, number int) (i int) {
-	for i = 0; i < number; i++ {
-		conn, _ := d.Dial("192.168.1.100:80")
-		c := b.bind(conn)
-		if b.push(c) != nil {
-			c.Close()
-			break
-		}
-	}
-	return
-}
-
-func bucketRandomPush(b *bucket, d *dialer, number int) (i, unused int) {
-	bg := newBoolgen()
-	for i = 0; i < number; i++ {
-		conn, _ := d.Dial("192.168.1.100:80")
-		c := b.bind(conn)
-		if b.push(c) != nil {
-			c.Close()
-			break
-		}
-
-		if bg.Bool() {
-			c.state = 0
-			unused++
-		}
-	}
-	return
-}
-
-// 'number' is the expected number of popping operations, and return value
-// is the actual number of popping operations.
-func bucketPop(b *bucket, number int) (i int) {
-	for i = 0; i < number; i++ {
-		if conn := b.pop(); conn != nil {
-			conn.Release()
-		} else {
-			break
-		}
-	}
-	return
-}
-
-func bucketFill(b *bucket, d *dialer) {
-	bucketPush(b, d, b.capacity-b.size)
-}
-
-// The original design of the following struct is from StackOverflow:
-// https://stackoverflow.com/questions/45030618/generate-a-random-bool-in-go?answertab=active#tab-top
-type boolgen struct {
-	src       rand.Source
-	cache     int64
-	remaining int
-}
-
-func newBoolgen() *boolgen {
-	return &boolgen{src: rand.NewSource(time.Now().UnixNano())}
-}
-
-func (b *boolgen) Bool() bool {
-	if b.remaining == 0 {
-		b.cache, b.remaining = b.src.Int63(), 63
-	}
-
-	result := b.cache&0x01 == 1
-	b.cache >>= 1
-	b.remaining--
-
-	return result
 }

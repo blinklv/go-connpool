@@ -1,38 +1,27 @@
 // example_test.go
 //
 // Author: blinklv <blinklv@icloud.com>
-// Create Time: 2018-07-31
+// Create Time: 2019-03-22
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2018-08-08
+// Last Change: 2019-03-28
 
 package connpool_test
 
 import (
-	"encoding/json"
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"github.com/blinklv/go-connpool"
+	"github.com/stretchr/testify/assert"
 	"io"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
-
-func dial(address string) (net.Conn, error) {
-	return &connection{}, nil
-}
-
-func selectAddress() string { return "" }
-
-func handle(net.Conn) error { return nil }
-
-func roundtrip(net.Conn, string) (string, error) {
-	return "Sometimes, just one second.", nil
-}
-
-var pool, _ = connpool.New(dial, 128, 5*time.Minute)
 
 // The following example illustrates how to use this package in your client program.
 func Example() {
@@ -81,401 +70,512 @@ func ExampleConn_Release() {
 	conn.(*connpool.Conn).Release()
 }
 
-// The following is a black box test for this package.
-func TestPool(t *testing.T) {
-	for _, s := range servers {
-		s := s
-		go s.run()
+/* Auxilairy Functions and Variables for Example */
+func dial(address string) (net.Conn, error) {
+	return &connection{}, nil
+}
+
+func selectAddress() string { return "" }
+
+func handle(net.Conn) error { return nil }
+
+func roundtrip(net.Conn, string) (string, error) {
+	return "Sometimes, just one second.", nil
+}
+
+var pool, _ = connpool.New(dial, 128, 5*time.Minute)
+
+/* Black Box Test */
+func TestPackage(t *testing.T) {
+	if testing.Short() {
+		return
 	}
 
-	sched := &scheduler{addressMap: make(map[string]*addressUnit)}
-	sched.initialize()
-
-	d := &dialer{}
-	pool, _ := connpool.New(d.Dial, 1024, 1*time.Minute)
-	cli := &client{pool, sched, d}
-	cli.run()
-}
-
-var servers = map[string]*server{
-	"192.168.0.1:80": &server{
-		address:  resolveAddr("192.168.0.1:80"),
-		delay:    10 * time.Millisecond,
-		lifetime: 5 * time.Minute,
-		accept: make(chan struct {
-			*pipe
-			remote net.Addr
-		}),
-	},
-	"192.168.0.2:80": &server{
-		address:  resolveAddr("192.168.0.2:80"),
-		delay:    50 * time.Millisecond,
-		lifetime: 10 * time.Minute,
-		accept: make(chan struct {
-			*pipe
-			remote net.Addr
-		}),
-	},
-	"192.168.0.3:80": &server{
-		address:  resolveAddr("192.168.0.3:80"),
-		delay:    100 * time.Millisecond,
-		lifetime: 20 * time.Minute,
-		accept: make(chan struct {
-			*pipe
-			remote net.Addr
-		}),
-	},
-	"192.168.0.4:80": &server{
-		address:  resolveAddr("192.168.0.4:80"),
-		delay:    200 * time.Millisecond,
-		lifetime: 20 * time.Minute,
-		accept: make(chan struct {
-			*pipe
-			remote net.Addr
-		}),
-	},
-}
-
-type addressUnit struct {
-	address string
-	count   int64
-	fail    int64
-}
-
-type scheduler struct {
-	i            int64
-	n            int
-	addressMap   map[string]*addressUnit
-	addressArray []*addressUnit
-}
-
-func (s *scheduler) initialize() {
-	for address, _ := range servers {
-		u := &addressUnit{address: address}
-		s.addressMap[address] = u
-		s.addressArray = append(s.addressArray, u)
+	ss := servers{
+		&server{address: "127.0.0.1:28081"},
+		&server{address: "127.0.0.1:28082"},
+		&server{address: "127.0.0.1:28083"},
+		&server{address: "127.0.0.1:28084"},
 	}
-	s.n = len(s.addressArray)
-}
 
-func (s *scheduler) get() (string, error) {
-	i := int(atomic.AddInt64(&s.i, 1))
-	return s.addressArray[i%s.n].address, nil
-}
-
-func (s *scheduler) feedback(address string, ok bool) {
-	u := s.addressMap[address]
-	atomic.AddInt64(&u.count, 1)
-	if !ok {
-		atomic.AddInt64(&u.fail, 1)
+	c := &client{
+		d:    &dialer{},
+		s:    (&scheduler{}).init(ss),
+		exit: make(chan struct{}),
 	}
-}
+	c.pool, _ = connpool.New(c.d.dial, poolCapacity, poolCleanupPeriod)
 
-// An implementation of the net.Error interface.
-type netError struct {
-	error
-	timeout   bool
-	temporary bool
-	broken    bool
-}
+	go ss.run()
+	time.Sleep(time.Second) // Wait for servers have already been running.
+	go c.run()
 
-func (ne *netError) Timeout() bool {
-	return ne.timeout
-}
+	timer := time.NewTimer(samplingPeriod)
 
-func (ne *netError) Temporary() bool {
-	return ne.temporary
-}
+	var old = &stats{}
+	exec := func(old *stats) *stats {
+		s := &stats{}
+		ss.sampling(s)
+		c.sampling(s)
+		s.assert(t)
 
-func (ne *netError) Broken() bool {
-	return ne.broken
-}
+		var diff = &stats{}
+		*diff = *s
 
-type client struct {
-	pool *connpool.Pool
-	s    *scheduler
-	d    *dialer
-}
+		diff.client_total_req -= old.client_total_req
+		diff.client_succ_req -= old.client_succ_req
+		diff.server_total_req -= old.server_total_req
+		diff.server_succ_req -= old.server_succ_req
 
-func (c *client) run() {
-	go func() {
-		for {
-			time.Sleep(10 * time.Second)
-			c.stats()
+		logf("%s\n%s", "statistics", diff)
+		return s
+	}
+
+	for {
+		select {
+		case <-timer.C:
+			old = exec(old)
+			timer.Reset(samplingPeriod)
+		case <-c.exit:
+			old = exec(old)
+			return
 		}
-	}()
-
-	handle := func(conn net.Conn) error {
-		_, err := io.WriteString(conn, "hello world")
-		if err != nil {
-			return err
-		}
-
-		buf := make([]byte, 1024)
-		_, err = conn.Read(buf)
-		return err
 	}
+}
 
-	var (
-		wg       = &sync.WaitGroup{}
-		wn int32 = 1024
-	)
+/* Environment Constant */
 
-	for i := 0; i < 1024; i++ {
+const (
+	samplingPeriod      = 10 * time.Second // The period of sampling statistical data.
+	requestWorkerNum    = 1024             // The number of workers which send requests.
+	workerBatch         = 16               // The number of workers generated at once.
+	workerBatchInterval = 5 * time.Second  // The interval between two generating workers.
+	requestNum          = 10000            // Request number per worker.
+	requestMsgSize      = 1024             // Message size of a request.
+	handleDelay         = time.Duration(0) // Server process delay.
+	poolCapacity        = requestWorkerNum // The capacity of the pool.
+	poolCleanupPeriod   = time.Minute      // The cleanup period of the pool.
+)
+
+/* Auxiliary Structs and Their Methods */
+
+// Statistical data.
+type stats struct {
+	dial_num          int64 // Number of invoking the dial method.
+	dial_total_conn   int64 // Number of current total connections.
+	client_total_conn int64 // Number of current total connections related to the client.
+	client_idle_conn  int64 // Number of idle connections related to the client.
+	client_total_req  int64 // Number of total requests sent by the client.
+	client_succ_req   int64 // Number of success requests sent by the client.
+	client_worker_num int64 // Number of client workers.
+	server_sess_num   int64 // Number of sessions related to the server.
+	server_total_req  int64 // Number of total requests received by the server.
+	server_succ_req   int64 // Number of success requests received by the server.
+}
+
+func (s *stats) String() string {
+	return sprintf(
+		strings.Repeat("%-24s:%10d\n", 10),
+		"dial-num", s.dial_num,
+		"dial-total-conn", s.dial_total_conn,
+		"client-total-conn", s.client_total_conn,
+		"client-idle-conn", s.client_idle_conn,
+		"client-total-req", s.client_total_req,
+		"client-succ-req", s.client_succ_req,
+		"client-worker-num", s.client_worker_num,
+		"server-sess-num", s.server_sess_num,
+		"server-total-req", s.server_total_req,
+		"server-succ-req", s.server_succ_req)
+}
+
+func (s *stats) assert(t *testing.T) {
+	const precision = 0.05
+	assert.Equalf(t, true, aequal(s.dial_total_conn, s.client_total_conn, precision),
+		"|dial_total_conn:%d - client_total_conn:%d| > %v",
+		s.dial_total_conn, s.client_total_conn, precision)
+	assert.Equalf(t, true, aequal(s.server_sess_num, s.client_total_conn, precision),
+		"|server_sess_num:%d - client_total_conn:%d| > %v",
+		s.server_sess_num, s.client_total_conn, precision)
+	assert.Equalf(t, true, aequal(s.client_total_req, s.server_total_req, precision),
+		"|client_total_req:%d - server_total_req:%d| > %v",
+		s.client_total_req, s.server_total_req, precision)
+	assert.Equalf(t, true, aequal(s.client_succ_req, s.server_succ_req, precision),
+		"|client_succ_req:%d - server_succ_req:%d| > %v",
+		s.client_succ_req, s.server_succ_req, precision)
+}
+
+// Manage multiple server simulators.
+type servers []*server
+
+func (ss servers) run() {
+	wg := sync.WaitGroup{}
+	for _, s := range ss {
 		wg.Add(1)
-		go func() {
-			for i := 0; i < 50000; i++ {
-				address, _ := c.s.get()
-
-				err := func() error {
-					conn, err := c.pool.Get(address)
-					if err != nil {
-						return err
-					}
-
-					if err = handle(conn); err != nil && err.(*netError).Broken() {
-						conn.(*connpool.Conn).Release()
-						if conn, err = c.pool.New(address); err != nil {
-							return err
-						}
-						err = handle(conn)
-					}
-					conn.Close()
-					return err
-				}()
-				c.s.feedback(address, err == nil)
-			}
+		go func(s *server) {
+			s.run()
 			wg.Done()
-			atomic.AddInt32(&wn, -1)
-		}()
+		}(s)
 	}
-
 	wg.Wait()
-	c.stats()
-	c.pool.Close()
-	c.stats()
 }
 
-func (c *client) stats() {
-	stats := c.pool.Stats()
-	data, _ := json.MarshalIndent(stats, " ", " ")
-	log.Printf("%s", data)
-	for _, u := range c.s.addressArray {
-		log.Printf("(%s) total: %d fail: %d",
-			u.address, atomic.LoadInt64(&u.count), atomic.LoadInt64(&u.fail))
+func (ss servers) exit() {
+	for _, s := range ss {
+		s.exit()
 	}
-	log.Printf("dial-count/total %d/%d", atomic.LoadInt64(&c.d.count), atomic.LoadInt64(&c.d.total))
 }
 
+// Sampling from multiple servers.
+func (ss servers) sampling(s *stats) {
+	for _, svr := range ss {
+		s.server_sess_num += load(&svr.sess_num)
+		s.server_total_req += load(&svr.total_req)
+		s.server_succ_req += load(&svr.succ_req)
+	}
+}
+
+// Server simulator.
 type server struct {
-	address       net.Addr // listen address
-	delay         time.Duration
-	lifetime      time.Duration
-	sessionNumber int64
-	accept        chan struct {
-		*pipe
-		remote net.Addr
-	}
+	address string // Listen address.
+	ln      net.Listener
+
+	sess_num  int64 // Number of sessions.
+	total_req int64 // Number of total requests to the server.
+	succ_req  int64 // Number of success requests to the server.
 }
 
 func (s *server) run() {
-	log.Printf("server (%s) start", s.address)
-	timeout := time.After(s.lifetime)
-outer:
-	for {
-		select {
-		case c := <-s.accept:
-			go (&session{s}).handle(&connection{
-				pipe:   c.pipe,
-				local:  s.address,
-				remote: c.remote,
-			})
-		case <-timeout:
-			break outer
-		}
+	var err error
+	s.ln, err = net.Listen("tcp", s.address)
+	if err != nil {
+		logf("start server (%s) failed (%s)", s.address, err)
+		return
 	}
-	close(s.accept)
-	log.Printf("server (%s) stop", s.address)
-}
 
-type session struct {
-	s *server
-}
+	var delay time.Duration // How long to sleep on accept failure.
 
-func (s *session) handle(c net.Conn) {
-	var (
-		n   int
-		err error
-	)
-
-	atomic.AddInt64(&s.s.sessionNumber, 1)
+	logf("start server (%s)", s.address)
 	for {
-		b := make([]byte, 1024)
-		n, err = c.Read(b)
+		conn, err := s.ln.Accept()
+		if err != nil {
+			if netError, ok := err.(net.Error); ok && netError.Temporary() {
+				if delay == 0 {
+					delay = 5 * time.Millisecond
+				} else {
+					delay *= 2
+				}
+				if delay > time.Second {
+					delay = time.Second
+				}
+
+				logf("accept error (%v), retrying in %v", err, delay)
+				time.Sleep(delay)
+				continue
+			}
+			break
+		}
+		delay = 0
+
+		go (&session{s}).handle(conn)
+	}
+	logf("stop server (%s)", s.address)
+}
+
+func (s *server) exit() {
+	s.ln.Close()
+}
+
+// Connection session of the server simulator.
+type session struct {
+	*server
+}
+
+func (sess *session) handle(conn net.Conn) {
+	add(&sess.sess_num, 1)
+	for {
+		request, err := decode(conn)
 		if err != nil {
 			break
 		}
-		if _, err = c.Write(b[:n]); err != nil {
+
+		add(&sess.total_req, 1)
+		if err = encode(conn, request); err != nil {
+			logf("handle connection (%s <- %s) failed (%s)",
+				conn.RemoteAddr(), conn.LocalAddr(), err)
 			break
+		}
+		add(&sess.succ_req, 1)
+
+		if handleDelay != 0 {
+			time.Sleep(handleDelay)
+		}
+	}
+	conn.Close()
+	add(&sess.sess_num, -1)
+}
+
+// Client simulator.
+type client struct {
+	pool       *connpool.Pool
+	d          *dialer
+	s          *scheduler
+	exit       chan struct{}
+	seq        int64 // Message sequence.
+	worker_num int64 // Number of current workers.
+}
+
+func (c *client) run() {
+	logf("start client")
+
+	wg := &sync.WaitGroup{}
+	for i := 0; i < requestWorkerNum; i++ {
+		wg.Add(1)
+		add(&c.worker_num, 1)
+		go func() {
+			for j := 0; j < requestNum; j++ {
+				c.handle()
+			}
+			wg.Done()
+			add(&c.worker_num, -1)
+		}()
+
+		if (i+1)%workerBatch == 0 {
+			time.Sleep(workerBatchInterval)
 		}
 	}
 
-	if !err.(*netError).Broken() {
-		log.Printf("handle connection (%s -> %s) error %s",
-			c.RemoteAddr(), c.LocalAddr(), err)
+	wg.Wait()
+	c.pool.Close()
+	logf("stop client")
+	close(c.exit)
+}
+
+func (c *client) handle() {
+	var (
+		address, _ = c.s.get()
+		request    = []byte(sprintf("message %d", add(&c.seq, 1)))
+	)
+
+	if padlen := requestMsgSize - len(request); padlen > 0 {
+		request = append(request, bytes.Repeat([]byte("!"), padlen)...)
 	}
-	atomic.AddInt64(&s.s.sessionNumber, -1)
+
+	response, err := c.roundtrip(address, request)
+	if err == nil && bytes.Compare(request, response) != 0 {
+		err = errorf("request (%s) != response (%s)", request, response)
+	}
+	c.s.feedback(address, err == nil)
+}
+
+func (c *client) roundtrip(address string, request []byte) ([]byte, error) {
+	conn, err := c.pool.Get(address)
+	if err != nil {
+		return nil, err
+	}
+
+	var response []byte
+	if response, err = c._roundtrip(conn, request); err != nil {
+		conn.(*connpool.Conn).Release()
+		if conn, err = c.pool.New(address); err != nil {
+			return nil, err
+		}
+		response, err = c._roundtrip(conn, request)
+	}
+
+	if conn != nil {
+		conn.Close()
+	}
+
+	return response, nil
+}
+
+func (c *client) _roundtrip(conn net.Conn, request []byte) ([]byte, error) {
+	if err := encode(conn, request); err != nil {
+		return nil, err
+	}
+
+	return decode(conn)
+}
+
+// Sampling from the client.
+func (c *client) sampling(s *stats) {
+	s.dial_num, s.dial_total_conn, s.client_worker_num = load(&c.d.dial_num), load(&c.d.total_conn), load(&c.worker_num)
+	for _, d := range (c.pool.Stats()).Destinations {
+		s.client_total_conn += d.Total
+		s.client_idle_conn += d.Idle
+	}
+	for _, addr := range c.s.addrs {
+		s.client_total_req += load(&addr.total_req)
+		s.client_succ_req += load(&addr.succ_req)
+	}
+}
+
+type scheduler struct {
+	i     int64
+	n     int // Number of addresses.
+	addrs []*struct {
+		value     string
+		total_req int64 // Number of total requests to the address.
+		succ_req  int64 // Number of success requests to the address.
+	}
+}
+
+// Initializes a scheduler obj and returns it.
+func (s *scheduler) init(ss servers) *scheduler {
+	for _, svr := range ss {
+		s.addrs = append(s.addrs, &struct {
+			value     string
+			total_req int64
+			succ_req  int64
+		}{value: svr.address})
+	}
+	s.n = len(s.addrs)
+	return s
+}
+
+// Get a server address from the scheduler.
+func (s *scheduler) get() (string, error) {
+	i := int(add(&s.i, 1))
+	return s.addrs[i%s.n].value, nil
+}
+
+// Feedback to the scheduler whether the server corresponding to the address is stable.
+func (s *scheduler) feedback(address string, ok bool) {
+	for _, addr := range s.addrs {
+		if addr.value == address {
+			add(&addr.total_req, 1)
+			if ok {
+				add(&addr.succ_req, 1)
+			}
+		}
+	}
 }
 
 type dialer struct {
-	localPort int32
-	count     int64
-	total     int64
+	dial_num   int64 // Number of invoking the dial method.
+	total_conn int64 // Number of current total connections.
 }
 
-func (d *dialer) Dial(address string) (conn net.Conn, err error) {
-	c := &connection{
-		pipe: &pipe{
-			read:  make(chan []byte),
-			write: make(chan []byte),
-		},
-		d:      d,
-		local:  resolveAddr(fmt.Sprintf("127.0.0.1:%d", atomic.AddInt32(&d.localPort, 1))),
-		remote: resolveAddr(address),
+// An implementation of connpool.Dial interface to create TCP connections.
+func (d *dialer) dial(address string) (net.Conn, error) {
+	add(&d.dial_num, 1)
+	conn, err := net.Dial("tcp", address)
+	if err != nil {
+		return nil, err
 	}
-
-	// The connection will be returned to the user only after the server
-	// accept it.
-	s := servers[address]
-
-	defer func() {
-		if x := recover(); x != nil {
-			conn, err = nil, fmt.Errorf("server (%s) is down", address)
-		}
-	}()
-
-	s.accept <- struct {
-		*pipe
-		remote net.Addr
-	}{
-		&pipe{read: c.pipe.write, write: c.pipe.read},
-		c.local,
-	}
-
-	atomic.AddInt64(&d.count, 1)
-	atomic.AddInt64(&d.total, 1)
-	return c, nil
+	add(&d.total_conn, 1)
+	return &connection{conn, d}, nil
 }
 
-type pipe struct {
-	read  chan []byte
-	write chan []byte
-}
-
-func (p *pipe) close() {
-	close(p.read)
-	close(p.write)
-}
-
+// Wraps the raw net.Conn interface to track current total connections.
 type connection struct {
-	*pipe
-	d             *dialer
-	local         net.Addr
-	remote        net.Addr
-	readDeadline  time.Time
-	writeDeadline time.Time
-}
-
-func (c *connection) Read(b []byte) (int, error) {
-	timeout := make(<-chan time.Time)
-	if !c.readDeadline.IsZero() {
-		timeout = after(c.readDeadline.Sub(time.Now()))
-	}
-
-	select {
-	case data, more := <-c.pipe.read:
-		if !more {
-			return 0, &netError{
-				error:  fmt.Errorf("read broken pipe (%s -> %s)", c.remote, c.local),
-				broken: true,
-			}
-		}
-		// excess part will be discarded.
-		return copy(b, data), nil
-	case <-timeout:
-		return 0, &netError{
-			error:   fmt.Errorf("read timeout (%s -> %s)", c.remote, c.local),
-			timeout: true,
-		}
-	}
-}
-
-func (c *connection) Write(b []byte) (n int, err error) {
-	timeout := make(<-chan time.Time)
-	if !c.writeDeadline.IsZero() {
-		timeout = after(c.writeDeadline.Sub(time.Now()))
-	}
-
-	defer func() {
-		if x := recover(); x != nil {
-			n, err = 0, &netError{
-				error:  fmt.Errorf("write broken pipe (%s -> %s)", c.local, c.remote),
-				broken: true,
-			}
-		}
-	}()
-
-	select {
-	case c.pipe.write <- b:
-		return len(b), nil
-	case <-timeout:
-		return 0, &netError{
-			error:   fmt.Errorf("write timeout (%s -> %s)", c.local, c.remote),
-			timeout: true,
-		}
-	}
+	net.Conn
+	d *dialer
 }
 
 func (c *connection) Close() error {
-	c.pipe.close()
-	atomic.AddInt64(&c.d.count, -1)
-	return nil
+	add(&c.d.total_conn, -1)
+	return c.Conn.Close()
 }
 
-func (c *connection) LocalAddr() net.Addr {
-	return c.local
+/* Auxiliary Functions */
+
+// I rename the following functions to simplify my codes because they're
+// very commonly used in this testing.
+var (
+	sprintf = fmt.Sprintf
+	errorf  = fmt.Errorf
+	add     = atomic.AddInt64
+	load    = atomic.LoadInt64
+)
+
+// Output log information in verbose mode.
+func logf(format string, args ...interface{}) {
+	if testing.Verbose() {
+		log.Printf(format, args...)
+	}
 }
 
-func (c *connection) RemoteAddr() net.Addr {
-	return c.remote
-}
-
-func (c *connection) SetDeadline(t time.Time) error {
-	c.readDeadline, c.writeDeadline = t, t
-	return nil
-}
-
-func (c *connection) SetReadDeadline(t time.Time) error {
-	c.readDeadline = t
-	return nil
-}
-
-func (c *connection) SetWriteDeadline(t time.Time) error {
-	c.writeDeadline = t
-	return nil
-}
-
-func after(d time.Duration) <-chan time.Time {
-	if d > 0 {
-		return time.After(d)
+// Approximately Equal ('≈'); check whether two integers are equal in error range.
+func aequal(a, b int64, e float64) bool {
+	// Don't compare small values.
+	if a < 16 || b < 16 {
+		return true
 	}
 
-	c := make(chan time.Time)
-	close(c)
-	return c
+	avg := (a + b) / 2
+	return avg == 0 || float64(abs(a-b))/float64(avg) <= e
 }
 
-func resolveAddr(address string) net.Addr {
-	addr, _ := net.ResolveTCPAddr("tcp", address)
-	return addr
+// Absolute value of an integer.
+func abs(x int64) int64 {
+	if x >= 0 {
+		return x
+	}
+	return -x
+}
+
+// The following codes implements a simple binary protocol encode/decode.
+//
+// +--------+--------+--------+--------+--------+--------+--------+--------+
+// | Start of Packet |      Length     |    Body Data    |   End of Packet |
+// |      3 bytes    |      4 bytes    |      n bytes    |      3 bytes    |
+// +--------+--------+--------+--------+--------+--------+--------+--------+
+
+var (
+	sop = []byte("SOP") // start of packet
+	eop = []byte("EOP") // end of packet
+)
+
+func encode(w io.Writer, data []byte) error {
+	_, err := w.Write(sop)
+	if err != nil {
+		return err
+	}
+
+	n := uint32(len(data))
+	_, err = w.Write([]byte{byte(n >> 24), byte(n >> 16), byte(n >> 8), byte(n)})
+	if err != nil {
+		return err
+	}
+
+	if _, err = w.Write(data); err != nil {
+		return err
+	}
+
+	_, err = w.Write(eop)
+	return err
+}
+
+func decode(r io.Reader) ([]byte, error) {
+	var (
+		err  error
+		n    uint32
+		data []byte
+		buf  = make([]byte, 3)
+	)
+
+	if _, err = io.ReadFull(r, buf); err != nil {
+		return nil, err
+	}
+	if bytes.Compare(buf, sop) != 0 {
+		return nil, errorf("start of packet (%v) is invalid", buf)
+	}
+
+	if err = binary.Read(r, binary.BigEndian, &n); err != nil {
+		return nil, err
+	}
+
+	data = make([]byte, int(n))
+	if _, err = io.ReadFull(r, data); err != nil {
+		return nil, err
+	}
+
+	if _, err = io.ReadFull(r, buf); err != nil {
+		return nil, err
+	}
+	if bytes.Compare(buf, eop) != 0 {
+		return nil, errorf("end of packet (%v) is invalid", buf)
+	}
+
+	return data, nil
 }

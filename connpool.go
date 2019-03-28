@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-01-10
+// Last Change: 2019-03-22
 
 // A concurrency-safe connection pool. It can be used to manage and reuse connections
 // based on the destination address of which. This design makes a pool work better with
@@ -11,13 +11,16 @@
 package connpool
 
 import (
-	"errors"
 	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+// Control whether the package runs in testing mode. The name of all variables, fields,
+// functions, and methods related to testing will have an underscore ('_') prefix.
+var _test = false
 
 // This type defines how to connect to the address. The purpose of designing this
 // type is to serve the Pool struct. It's not as common as net.Dial that you can
@@ -32,15 +35,20 @@ import (
 type Dial func(address string) (net.Conn, error)
 
 // Pool is a connection pool. It will cache some connections for each address.
-// If a connection is never be used for a long time (mark it as idle), it will
-// be cleaned.
+// If a connection has never been used for a long time (mark it as idle), it
+// will be released.
 type Pool struct {
-	rwlock   sync.RWMutex
+	rw       sync.RWMutex
 	dial     Dial
 	capacity int
 	period   time.Duration
-	bs       map[string]*bucket
+	buckets  map[string]*bucket
 	exit     chan chan struct{}
+	closed   bool
+
+	// _interrupt channel is used to notify users the connection pool has
+	// been cleaned once. (**only used in testing mode**)
+	_interrupt chan chan struct{}
 }
 
 // Create a connection pool. The dial parameter defines how to create a new
@@ -66,7 +74,8 @@ func New(dial Dial, capacity int, period time.Duration) (*Pool, error) {
 		return nil, fmt.Errorf("capacity (%d) can't be less than zero", capacity)
 	}
 
-	if period < time.Minute {
+	// NOTE: period can be less than 1 min in testing mode :)
+	if !_test && period < time.Minute {
 		return nil, fmt.Errorf("cleanup period (%s) can't be less than 1 min", period)
 	}
 
@@ -74,18 +83,23 @@ func New(dial Dial, capacity int, period time.Duration) (*Pool, error) {
 		dial:     dial,
 		capacity: capacity,
 		period:   period,
-		bs:       make(map[string]*bucket),
+		buckets:  make(map[string]*bucket),
 		exit:     make(chan chan struct{}),
 	}
-	// The cleanup method runs in a new goroutine. In fact, the primary objective of
-	// designing the Close method is stopping it to prevent resource leak.
-	go pool.cleanup()
+
+	if _test {
+		pool._interrupt = make(chan chan struct{})
+	}
+
+	// The autoCleanup method runs in a new goroutine. In fact, the primary reason
+	// of designing the Closed method is stopping it to prevent resource leak.
+	go pool.autoCleanup()
 
 	return pool, nil
 }
 
-// Get a connection from the pool, the destination address of which is
-// equal to the address parameter.
+// Get a connection from the pool, the destination address of which is equal to
+// the address parameter. If an error happens, the connection returned is nil.
 func (pool *Pool) Get(address string) (net.Conn, error) {
 	// First, get a connection bucket.
 	b := pool.selectBucket(address)
@@ -93,7 +107,7 @@ func (pool *Pool) Get(address string) (net.Conn, error) {
 	// Second, get a connection from the bucket.
 	conn := b.pop()
 	if conn == nil {
-		// If there is no idle connection in this bucket, we need to invoke the
+		// If there is no idle connection in the bucket, we need to invoke the
 		// dial function to create a new connection and bind it to the bucket.
 		if c, err := pool.dial(address); err == nil {
 			conn = b.bind(c)
@@ -105,23 +119,40 @@ func (pool *Pool) Get(address string) (net.Conn, error) {
 	return conn, nil
 }
 
-// Create a new connection by using the underlying dial field, and bind it to a bucket.
+// Create a new connection by using the underlying dial function you register
+// and bind it to the specific bucket.
 func (pool *Pool) New(address string) (net.Conn, error) {
-	b := pool.selectBucket(address)
 	if c, err := pool.dial(address); err == nil {
-		return b.bind(c), nil
+		return pool.selectBucket(address).bind(c), nil
 	} else {
 		return nil, err
 	}
 }
 
-// Close the connection pool. It will release all idle connections in the pool. You
-// shouldn't use this pool anymore after this method has been called.
-func (pool *Pool) Close() error {
-	exitDone := make(chan struct{})
-	pool.exit <- exitDone
-	<-exitDone
-	return nil
+// Close the connection pool. It will release all idle connections in the pool.
+// You shouldn't use this pool anymore after this method has been called.
+func (pool *Pool) Close() (err error) {
+	pool.rw.Lock()
+	if !pool.closed {
+		pool.closed = true
+	} else {
+		err = fmt.Errorf("connection pool is already closed")
+	}
+
+	// Although there is no code to acquire the lock explicitly after the following
+	// statement, the cleanup task will be triggered to do it implicitly. So the
+	// lock must be released at this point to avoid deadlock.
+	pool.rw.Unlock()
+
+	if err == nil {
+		// I must guarantee the following statements are only executed once; otherwise,
+		// it will be blocked forever at the second time (3re, 4th, ...) cause there is
+		// no reader of the pool.exit channel.
+		done := make(chan struct{})
+		pool.exit <- done
+		<-done
+	}
+	return
 }
 
 // Pool's statistical data. You can get it from Pool.Stats method.
@@ -149,18 +180,18 @@ type DestinationStats struct {
 	Idle int64 `json:"idle"`
 }
 
-// Get a statistical data slice of the Pool.
+// Get a statistical data of the Pool.
 func (pool *Pool) Stats() *Stats {
 	stats := &Stats{
 		Timestamp: time.Now().Unix(),
 	}
 
-	pool.rwlock.RLock()
-	defer pool.rwlock.RUnlock()
+	pool.rw.RLock()
+	defer pool.rw.RUnlock()
 
-	stats.Destinations = make([]DestinationStats, 0, len(pool.bs))
-	for address, b := range pool.bs {
-		// We needn't add the lock to protect 'total' and 'idle' field of a
+	stats.Destinations = make([]DestinationStats, 0, len(pool.buckets))
+	for address, b := range pool.buckets {
+		// We needn't add the lock to protect the total and the idle field of a
 		// bucket; any operation on them is atomic.
 		stats.Destinations = append(stats.Destinations, DestinationStats{
 			Address: address,
@@ -168,66 +199,90 @@ func (pool *Pool) Stats() *Stats {
 			Idle:    atomic.LoadInt64(&b.idle),
 		})
 	}
-
 	return stats
 }
 
-// Select a bucket for the address. If it doesn't exist, create a new one.
+// select a bucket for the address. If it doesn't exist, create a new one; which
+// means the return value of this function can't be nil.
 func (pool *Pool) selectBucket(address string) (b *bucket) {
-	// Get a bucket from the bucket map.
-	pool.rwlock.RLock()
-	b = pool.bs[address]
-	pool.rwlock.RUnlock()
+	// At first, get a bucket from the buckets.
+	pool.rw.RLock()
+	b = pool.buckets[address]
+	pool.rw.RUnlock()
 
-	// This condition statement can save much time in most cases. Because
-	// the bucket for this address has already existed in normal case.
-	// Otherwise, we have to add write-lock every time.
+	// This conditional statement can save much time in most cases. Because the bucket
+	// for the address has already existed in normal case; otherwise, we have to add
+	// write-lock every time.
 	if b == nil {
-		pool.rwlock.Lock()
+		pool.rw.Lock()
 		// If the bucket for this address doesn't exist, we need to create a
 		// new one and add it to the bucket map.
 		//
 		// NOTE: We need to check whether there has already existed a bucket for
 		// this address again. The outer statement 'if b == nil' can't guarantee
 		// the bucket doesn't exist at this point.
-		if b = pool.bs[address]; b == nil {
-			b = &bucket{capacity: pool.capacity}
-			pool.bs[address] = b
+		if b = pool.buckets[address]; b == nil {
+			b = &bucket{capacity: pool.capacity, closed: pool.closed, top: &element{}}
+			pool.buckets[address] = b
 		}
-		pool.rwlock.Unlock()
+		pool.rw.Unlock()
 	}
 	return
 }
 
-// Clean idle connections periodically.
-func (pool *Pool) cleanup() {
-	var (
-		ticker = time.NewTicker(pool.period)
-		bs     []*bucket
-	)
-
+// Cleanup idle connections periodically.
+func (pool *Pool) autoCleanup() {
+	timer := time.NewTimer(pool.period)
 	for {
 		select {
-		case <-ticker.C:
-			pool.rwlock.RLock()
-			for _, b := range pool.bs {
-				// If we invoke bucket's cleanup method in this for loop it will cause the
-				// Get or the New method waiting for too long when creates a new bucket.
-				bs = append(bs, b)
-			}
-			pool.rwlock.RUnlock()
+		case <-timer.C:
+			pool.cleanup(false)
 
-			for _, b := range pool.bs {
-				b.cleanup(false)
+			if _test {
+				pool._wait()
 			}
-		case exitDone := <-pool.exit:
-			ticker.Stop()
-			for _, b := range pool.bs {
-				b.cleanup(true)
-			}
-			close(exitDone)
+
+			timer.Reset(pool.period)
+		case done := <-pool.exit:
+			timer.Stop()
+			pool.cleanup(true)
+			close(done)
+			return
 		}
 	}
+}
+
+// Cleanup idle connections once.
+func (pool *Pool) cleanup(shutdown bool) {
+	pool.rw.RLock()
+	var buckets = make([]*bucket, 0, len(pool.buckets))
+	// If we invokes the bucket.cleanup method in this for-loop, which
+	// will cause the Get or the New method waiting for too long when
+	// creates a new bucket.
+	for _, b := range pool.buckets {
+		buckets = append(buckets, b)
+	}
+	pool.rw.RUnlock()
+
+	for _, b := range buckets {
+		b.cleanup(shutdown)
+	}
+}
+
+// _wait method sends a signal to users that the pool has been cleaned once,
+// and waits users finish their works. (**only used in testing mode**)
+func (pool *Pool) _wait() {
+	back := make(chan struct{})
+	pool._interrupt <- back
+	<-back
+}
+
+// Returns the number of idle connections of the pool. (**only used in testing mode**)
+func (pool *Pool) _size() (size int) {
+	for _, b := range pool.buckets {
+		size += b.size
+	}
+	return
 }
 
 // bucket is a collection of connections, the internal structure of which is
@@ -236,216 +291,171 @@ type bucket struct {
 	sync.Mutex
 	size     int
 	capacity int
-	top      *element
 	closed   bool
+
+	// The head pointer of the linked list. I name it to 'top' cause I operate
+	// the linked list as a stack. It will reference an empty element when
+	// initialize.
+	top *element
+
+	// The cut field records the successor of the popped element which has
+	// the max depth between the two adjacent cleanup task; the depth field
+	// records the number of elements above the element referenced by the
+	// cut field (it's 0 when the cut field is nil).
+	cut   *element
+	depth int
 
 	// The following fields are related to statistics, and the sync.Mutex doesn't
 	// protect them. So any operation on them should be atomic.
 	total int64 // The total number of connections related to this bucket.
 	idle  int64 // The number of idle connections in the bucket.
+}
 
-	// The 'interrupt' field is only used in test mode; it will be nil
-	// in normal cases.
-	interrupt chan chan struct{}
+// push a connection to the bucket. If success, returns; otherwise,
+// returns false when bucket is full or closed.
+func (b *bucket) push(conn *Conn) (ok bool) {
+	b.Lock()
+	if !b.closed && b.size < b.capacity {
+		b.top = &element{conn: conn, next: b.top}
+		b.size++
+		atomic.AddInt64(&b.idle, 1)
+
+		if b.cut != nil {
+			// If the cut field is already initialized, the number of elements above
+			// the element referenced by which will increase.
+			b.depth++
+		}
+		ok = true
+	}
+	b.Unlock()
+	return
 }
 
 // pop a connection from the bucket. If the bucket is empty or closed, returns nil.
 func (b *bucket) pop() (conn *Conn) {
 	b.Lock()
-	if b.size > 0 && !b.closed {
+	if !b.closed && b.size > 0 {
+		// There two cases we need to adjust the cut field to reference the
+		// successor of the top one:
+		//
+		// 1. The cut field is nil. Which means the pop method has never been called
+		//    since the last cleanup operation.
+		// 2. The top element is equal to the element referenced by the cut field.
+		//    Cause the top element will be returned immediately, so the cut field
+		//    must move to the successor of which.
+		if b.top == b.cut || b.cut == nil {
+			b.cut = b.top.next
+		}
+
+		if b.depth > 0 {
+			b.depth--
+		}
+
 		conn, b.top = b.top.conn, b.top.next
 		b.size--
-
-		// Although this statement is in the critical region, the 'idle' field is not
-		// protected by the sync.Mutex and can be accessed by outer caller directly.
-		// So we need to use the following atomic operation to handle it.
 		atomic.AddInt64(&b.idle, -1)
 	}
 	b.Unlock()
 	return
 }
 
-var (
-	bucketIsFull   = errors.New("bucket is full")
-	bucketIsClosed = errors.New("bucket is closed")
-)
-
-// push a connection to the bucket. If the bucket is full, returns bucketIsFull.
-// If the bucket is closed, returns bucketIsClosed.
-func (b *bucket) push(conn *Conn) (err error) {
-	b.Lock()
-	if !b.closed && b.size < b.capacity {
-		// When a connection is pushed to the bucket, we think it's used recently.
-		// So we set the state to 1 (active). This operation can't done in the pop
-		// method, because some connections are created directly instead of poping
-		// from the bucket.
-		conn.state = 1
-
-		// Adjust the top and the size.
-		b.top = &element{conn: conn, next: b.top}
-		b.size++
-		atomic.AddInt64(&b.idle, 1)
-	} else if b.closed {
-		// In fact, the bucket is full and closed can happen simultaneously, but
-		// we think the closed state has higher priority.
-		err = bucketIsClosed
-	} else {
-		err = bucketIsFull
-	}
-	b.Unlock()
-	return
-}
-
-// When a connection is created, we should bind it to the specific bucket.
-func (b *bucket) bind(c net.Conn) *Conn {
+// A connection should be bound to the specific bucket when it's created.
+func (b *bucket) bind(conn net.Conn) *Conn {
 	atomic.AddInt64(&b.total, 1)
-	return &Conn{c, b, 0}
+	return &Conn{conn, b}
 }
 
-// Clean all idle connections in the bucket and return the number of connections cleaned
-// up in this process. This operation is more expensive than the pop and the push method
-// . The primary problem is this operation will make other methods (push, pop) temporary
-// unavailability when the list is too long. The current strategy is dividing this task
-// into a number of small parts; other methods have a chance to get the lock between two
-// subtasks.
+// Cleans up the idle connections of the bucket and returns the number of closed
+// connections. If the shutdown parameter is false, only releases connections not
+// used rencently; otherwise, releases all.
 func (b *bucket) cleanup(shutdown bool) (unused int) {
+	var cut element
 
-	for backup, inc := (*element)(nil), 0; ; {
-		backup, inc = b.iterate(backup, shutdown)
-		unused += inc
-		if backup == nil {
-			break
-		}
-
-		// NOTE: The interrupt field isn't empty only in test mode.
-		if b.interrupt != nil {
-			done := make(chan struct{})
-			b.interrupt <- done
-			<-done
-		}
-	}
-
-	if b.interrupt != nil {
-		// NOTE: The following statements only run in test mode. So no matter
-		// how complicated it is, it won't affect performance in normal cases.
-		close(b.interrupt)
-		b.interrupt = nil
-	}
-	return
-}
-
-// Wrap the _iterate method; lock it and initialize the backup parameter.
-func (b *bucket) iterate(backup *element, shutdown bool) (*element, int) {
 	b.Lock()
-	defer b.Unlock()
-
-	// The 'closed' field of a bucket will be set to true only when the Close
-	// method of the pool is invoked. The following assignment is placed in the
-	// bucket.cleanup method may be better from the view of semantics, but if we
-	// do that, we need some additional works (add lock) to protect it. However,
-	// these works can be omitted in this method.
 	b.closed = shutdown
 
-	if backup == nil {
-		if b.top == nil {
-			return nil, 0
-		}
-		backup, b.top, b.size = b.top, nil, 0
-		atomic.StoreInt64(&b.idle, 0)
+	// I use an empty element to represent the end of a linked list; it's a mark
+	// node which tells you that you reach the end. The primary reason I don't use
+	// the nil to represent the end is distinguishing it from the beginning.
+	if !shutdown && b.cut != nil {
+		cut, *b.cut = *b.cut, element{}
+	} else {
+		cut, b.top, b.depth = *b.top, &element{}, 0
 	}
 
-	return b._iterate(backup, shutdown)
+	// The element referenced by the cut field and elements below it will be
+	// released, so the number of remaining connections is equal to the depth
+	// of the last cycle. We also need to reset the cut field and the depth
+	// field to nil and zero respectively to prepare for the next cycle.
+	b.size, b.cut, b.depth = b.depth, nil, 0
+	atomic.StoreInt64(&b.idle, int64(b.size))
+	b.Unlock()
+
+	for e := &cut; e.conn != nil; e = e.next {
+		e.conn.Release()
+		unused++
+	}
+
+	return
 }
 
-// Iterate each connection in the bucket. If the connection's state is active,
-// reset it to idle and push it to the temporary bucket. Otherwise, skip it (of
-// course also release it) and descrease the original bucket's size.
-func (b *bucket) _iterate(backup *element, shutdown bool) (*element, int) {
-	// Invariant: the backup parameter isn't nil.
-	var (
-		top, tail, current *element
-		// 'unused' variable records the number of connections cleand up
-		// in this iteration.
-		i, unused int
-	)
-
-	// We only handle the first 16 connections at once; this will prevent this
-	// loop costs so much time when the list is too long.
-	for i = 0; backup != nil && i < 16; i++ {
-		current, backup = backup, backup.next
-		if !shutdown && b.size < b.capacity && current.conn.state == 1 {
-			// 'tail' records the first active connection in this iteration. Becase we push
-			// active connections to the temporary bucket, which will reverse the elements
-			// order in the original bucket. The first active element will become the last
-			// element of the temporary bucket, so I named it 'tail'.
-			if top == nil {
-				tail = current
-			}
-
-			current.conn.state = 0
-			top, current.next = current, top
-			b.size++
-			atomic.AddInt64(&b.idle, 1)
-		} else {
-			current.conn.Release()
-			unused++
-		}
-	}
-
-	if top != nil {
-		b.top, tail.next = top, b.top
-	}
-	return backup, unused
-}
-
-// Set the bucket to the closed state; it's only used in test now.
+// Set the bucket to the closed state. (**only used in testing mode**)
 func (b *bucket) _close() {
 	b.Lock()
 	b.closed = true
-	defer b.Unlock()
+	b.Unlock()
 }
 
-// Iterating all elements in the bucket to compute its size; it's only
-// used in test now.
+// Iterating all elements to compute its size. (**only used in testing mode**)
 func (b *bucket) _size() int {
 	size := 0
-	for top := b.top; top != nil; top = top.next {
+	for e := b.top; e.conn != nil; e = e.next {
 		size++
 	}
 	return size
 }
 
-// The basic element of the bucket.
+// Computing the size of all elements above the element referenced by the
+// cut field. (**only used in testing mode**)
+func (b *bucket) _depth() int {
+	depth := 0
+	for e := b.top; b.cut != nil && e != b.cut; e = e.next {
+		depth++
+	}
+	return depth
+}
+
+// The basic element of the bucket type. Multiple elements are organized
+// in linked list form.
 type element struct {
 	conn *Conn
 	next *element
 }
 
-// Conn is an implementation of the net.Conn interface. It just wraps the raw
-// connection directly, which rewrites the original Close method.
+// An implementation of the net.Conn interface. It wraps the raw connection
+// created by the dial function you register to rewrite the original Close
+// method, which can make you put a connection to the pool implicitly by using
+// the Close method instead of calling an pool.Put method explicitly to do
+// this. The former is more natural than the latter for users.
 type Conn struct {
-	// The raw connection created by the dial function which you register.
-	net.Conn
-
-	// The bucket to which this connection binds.
-	b *bucket
-
-	// Represents whether the current connection is active or idle. 0 means
-	// idle and 1 means active. This field is only meaningful to the correspond
-	// bucket. The connection itself doesn't access it.
-	state int32
+	net.Conn         // The raw connection created by the dial function you register.
+	b        *bucket // The bucket to which this connection binds.
 }
 
-// If there is enough room in the connection pool to place this connection,
-// push it to the pool. Otherwise, release this connection directly.
+// Close the connection. If the pool which this connection binds to isn't
+// closed and has enough room, puts the connection to the pool; otherwise,
+// release the underlying connection directly (call the raw Close method).
 func (conn *Conn) Close() error {
-	if err := conn.b.push(conn); err != nil {
+	if !conn.b.push(conn) {
 		return conn.Release()
 	}
 	return nil
 }
 
-// Release the underlying connection directly.
+// Release the underlying connection. It will call the Close method of the
+// net.Conn field. Although you can invoke the Close method of the net.Conn
+// field (exported) by yourself, I don't recommend you do this, cause the
+// Release method will do some extra works.
 func (conn *Conn) Release() error {
 	atomic.AddInt64(&conn.b.total, -1)
 	return conn.Conn.Close()
