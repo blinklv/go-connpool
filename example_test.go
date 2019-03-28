@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2019-03-22
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-03-27
+// Last Change: 2019-03-28
 
 package connpool_test
 
@@ -87,6 +87,10 @@ var pool, _ = connpool.New(dial, 128, 5*time.Minute)
 
 /* Black Box Test */
 func TestPackage(t *testing.T) {
+	if testing.Short() {
+		return
+	}
+
 	ss := servers{
 		&server{address: "127.0.0.1:28081"},
 		&server{address: "127.0.0.1:28082"},
