@@ -179,6 +179,14 @@ The code in critical region of the bucket is simple (*time complexity O(1)*) but
 
 ![cut pointer init](img/cut_pointer_init.svg)
 
+Both the `bucket.push` method and the `bucket.pop` method can initialize it. If the push method is called at first, the bucket will be like this.
+
+![push init cut pointer](img/push_init_cut_pointer.svg)
+
+The first used connections (*red block*) is just added. If the pop method is called at first, the situation will be different. 
+
+![pop init cut pointer](img/pop_init_cut_pointer.svg)
+
 ## License 
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details
