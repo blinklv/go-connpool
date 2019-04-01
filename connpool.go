@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-03-22
+// Last Change: 2019-04-01
 
 // A concurrency-safe connection pool. It can be used to manage and reuse connections
 // based on the destination address of which. This design makes a pool work better with
@@ -316,15 +316,17 @@ type bucket struct {
 func (b *bucket) push(conn *Conn) (ok bool) {
 	b.Lock()
 	if !b.closed && b.size < b.capacity {
+		if b.cut == nil {
+			b.cut = b.top
+		}
+		// The cut field has already been initialized (no matter by the bucket.push
+		// method or the bucket.pop method) at this point; the number of elements
+		// above the element referenced by which will increase.
+		b.depth++
+
 		b.top = &element{conn: conn, next: b.top}
 		b.size++
 		atomic.AddInt64(&b.idle, 1)
-
-		if b.cut != nil {
-			// If the cut field is already initialized, the number of elements above
-			// the element referenced by which will increase.
-			b.depth++
-		}
 		ok = true
 	}
 	b.Unlock()
@@ -335,11 +337,11 @@ func (b *bucket) push(conn *Conn) (ok bool) {
 func (b *bucket) pop() (conn *Conn) {
 	b.Lock()
 	if !b.closed && b.size > 0 {
-		// There two cases we need to adjust the cut field to reference the
+		// There are two cases we need to adjust the cut field to reference the
 		// successor of the top one:
 		//
-		// 1. The cut field is nil. Which means the pop method has never been called
-		//    since the last cleanup operation.
+		// 1. The cut field is nil. Which means the pop and the push method have
+		//    never been called since the last cleanup operation.
 		// 2. The top element is equal to the element referenced by the cut field.
 		//    Cause the top element will be returned immediately, so the cut field
 		//    must move to the successor of which.
