@@ -123,7 +123,7 @@ type element struct {
 }
 ```
 
-The underlying structure of the bucket is the **singly** linked list; the above `element` struct represents the [node][] of which. We use an empty element (`&element{}`) instead of `nil` as the terminator of the linked list; so even if a bucket is empty, its head pointer (`top`) is not nil. You will see the cleanup strategy will benefit from this [sentinel node][].
+The underlying structure of the bucket is the **singly** linked list; the above `element` struct represents the [node][] of which. We use an empty element (`&element{}`) instead of `nil` as the terminator of the linked list; so even if a bucket is empty, its head pointer (`top`) is not nil.
 
 **Working Set**
 
@@ -152,7 +152,32 @@ bucket.unlock()
 cleanup(unused_top)     // Cleanup (release) unused connections
 ```
 
-It works, but not efficiently. 
+It works, but maybe not efficient. Cause the time complexity of the codes in the critical region of the bucket is **O(n)**, which means other user common operations (`bucket.push` and `bucket.pop`) will be blocked for a long time when there exist too many connections in the bucket. Have you notice that getting a connection from the bucket is called `pop` and putting a connection to the bucket is called `push`? What abstract data types have these two principal operations? It's [stack][]! The core feature of stack is **LIFO(last in, first out)**, which can lead to a useful conclusion: **All used connections cluster in the upper half of the bucket**. We only need one `cut` pointer to seperate these two types of connections. 
+
+![working set](img/working_set.svg)
+
+**Cleanup Strategy**
+
+Now, we assume we have a correct `cut` pointer;the following codes (*pseudocode*) gives you a more efficient way to cleanup unused connections.
+
+```go
+var cut *element
+
+bucket.lock()
+cut = *b.cut                // Using a temporary cut variable reserve the head of unused connections.
+(*bucket.cut) = element{}   // Using an empty element overwrite the cut field.
+bucket.unlock()
+
+cleanup(cut)                // Cleanup (release) unused connections.
+```
+
+The code in critical region of the bucket is simple (*time complexity O(1)*) but powerful (*seperate two types of conns*). Using an empty element overwrite the cut field means adjust the terminator of the bucket to the successor of the last used idle connections.
+
+**Maintain Cut Pointer**
+
+`cut` pointer makes our solution more efficient. But how does it come from? How should we maintain a correct cut field to make it always pointer to the first unused connection? We assume a bucket has been cleaned up just now; it's in the initial state and cut pointer is nil (which means all idle connections are unused).
+
+![cut pointer init](img/cut_pointer_init.svg)
 
 ## License 
 
@@ -162,4 +187,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 [Go]: https://golang.org/
 [name server]: https://en.wikipedia.org/wiki/Name_server
 [node]: https://en.wikipedia.org/wiki/Node_(computer_science)
-[sentinel node]: https://en.wikipedia.org/wiki/Sentinel_node
+[stack]: https://en.wikipedia.org/wiki/Stack_(abstract_data_type)
