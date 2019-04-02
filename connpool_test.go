@@ -78,6 +78,75 @@ func TestBucketPush(t *testing.T) {
 	}
 }
 
+func TestBucketPop(t *testing.T) {
+	for _, env := range []struct {
+		b      *bucket
+		n      int
+		closed bool
+	}{
+		{b: &bucket{capacity: 0, top: &element{}}, n: 4096, closed: false},
+		{b: &bucket{capacity: 1, top: &element{}}, n: 4096, closed: false},
+		{b: &bucket{capacity: 2048, top: &element{}}, n: 4096, closed: false},
+		{b: &bucket{capacity: 4096, top: &element{}}, n: 4096, closed: false},
+		{b: &bucket{capacity: 8192, top: &element{}}, n: 4096, closed: false},
+		{b: &bucket{capacity: 0, top: &element{}}, n: 4096, closed: true},
+		{b: &bucket{capacity: 1, top: &element{}}, n: 4096, closed: true},
+		{b: &bucket{capacity: 2048, top: &element{}}, n: 4096, closed: true},
+		{b: &bucket{capacity: 4096, top: &element{}}, n: 4096, closed: true},
+		{b: &bucket{capacity: 8192, top: &element{}}, n: 4096, closed: true},
+	} {
+		var (
+			d = &dialer{}
+			a = &assertions{assert.New(t), env}
+			s = &stats{}
+		)
+
+		for i := 0; i < env.b.capacity; i++ {
+			conn, _ := d.dial("192.168.1.1:80")
+			env.b.push(env.b.bind(conn))
+		}
+		unused := env.b.cleanup(false) // Reset the bucket to the initial state.
+		a.equalf(0, unused, "0 != unused:%d", unused)
+
+		if env.closed {
+			env.b._close()
+		}
+
+		execute(64, env.n, func() {
+			if c := env.b.pop(); c != nil {
+				add(&s.succ, 1)
+				c.Release()
+			} else {
+				add(&s.fail, 1)
+			}
+		})
+
+		t.Logf("%s %s %s", s.str(), d.str(), env.b.str())
+
+		a.equalf(env.n, s.succ+s.fail, "number:%d != s.succ:%d + s.fail:%d", env.n, s.succ, s.fail)
+		a.equalf(max(env.b.capacity-int(s.succ), 0), env.b.size, "min{cap:%d - succ:%d, 0} != size:%d", env.b.capacity, s.succ, env.b.size)
+		a.equalf(env.b._size(), env.b.size, "_size:%d != size:%d", env.b._size(), env.b.size)
+		a.equalf(max(env.b.capacity-int(s.succ), 0), env.b.total, "min{cap:%d - succ:%d, 0} != total:%d", env.b.capacity, s.succ, env.b.total)
+		a.equalf(max(env.b.capacity-int(s.succ), 0), env.b.idle, "min{cap:%d - succ:%d, 0} != idle:%d", env.b.capacity, s.succ, env.b.idle)
+		a.equalf(0, env.b.depth, "0 != depth:%d", env.b.depth)
+		a.equalf(env.b.depth, env.b._depth(), "depth:%d != _depth:%d", env.b.depth, env.b._depth())
+
+		if !env.closed && env.b.capacity > 0 {
+			a.equalf(min(env.b.capacity, env.n), s.succ, "min{capacity:%d, number:%d} != s.succ:%d", env.b.capacity, env.n, s.succ)
+			a.equalf(max(env.n-env.b.capacity, 0), s.fail, "max{number:%d - capacity:%d, 0} != s.fail:%d", env.n, env.b.capacity, s.fail)
+
+			if env.b.size > 0 {
+				a.not_equalf((*Conn)(nil), env.b.cut.conn, "nil == cut.conn:%v", env.b.cut.conn)
+			} else {
+				a.equalf((*Conn)(nil), env.b.cut.conn, "nil != cut.conn:%v", env.b.cut.conn)
+			}
+		} else {
+			a.equalf(0, s.succ, "0 != s.succ:%d", s.succ)
+			a.equalf((*element)(nil), env.b.cut, "nil != cut:%v", env.b.cut)
+		}
+	}
+}
+
 /* Auxiliary Structs and Their Methods */
 
 type dialer struct {
@@ -163,6 +232,10 @@ type assertions struct {
 
 func (a *assertions) equalf(expected, actual interface{}, msg string, args ...interface{}) bool {
 	return a.Equalf(int2int64(expected), int2int64(actual), sprintf("%#v %s", a.env, msg), args...)
+}
+
+func (a *assertions) not_equalf(expected, actual interface{}, msg string, args ...interface{}) bool {
+	return a.NotEqualf(int2int64(expected), int2int64(actual), sprintf("%#v %s", a.env, msg), args...)
 }
 
 // Satisfy sort.Interface to sort multiple DestinationsStats structs.
