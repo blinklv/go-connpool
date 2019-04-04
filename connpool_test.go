@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2019-04-01
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-04-02
+// Last Change: 2019-04-04
 
 package connpool
 
@@ -144,6 +144,120 @@ func TestBucketPop(t *testing.T) {
 			a.equalf(0, s.succ, "0 != s.succ:%d", s.succ)
 			a.equalf((*element)(nil), env.b.cut, "nil != cut:%v", env.b.cut)
 		}
+	}
+}
+
+func TestBucketCleanup(t *testing.T) {
+	for _, env := range []struct {
+		b        *bucket
+		init_num int
+		push_num int
+		pop_num  int
+		closed   bool
+	}{
+		{b: &bucket{capacity: 100000, top: &element{}}, init_num: 0, push_num: 256, pop_num: 128, closed: false},
+		{b: &bucket{capacity: 100000, top: &element{}}, init_num: 0, push_num: 256, pop_num: 256, closed: false},
+		{b: &bucket{capacity: 100000, top: &element{}}, init_num: 0, push_num: 256, pop_num: 512, closed: false},
+		{b: &bucket{capacity: 100000, top: &element{}}, init_num: 1024, push_num: 256, pop_num: 128, closed: false},
+		{b: &bucket{capacity: 100000, top: &element{}}, init_num: 1024, push_num: 256, pop_num: 256, closed: false},
+		{b: &bucket{capacity: 100000, top: &element{}}, init_num: 1024, push_num: 256, pop_num: 512, closed: false},
+		{b: &bucket{capacity: 100000, top: &element{}}, init_num: 1024, push_num: 256, pop_num: 2048, closed: false},
+		{b: &bucket{capacity: 100000, top: &element{}}, init_num: 0, push_num: 256, pop_num: 128, closed: true},
+		{b: &bucket{capacity: 100000, top: &element{}}, init_num: 0, push_num: 256, pop_num: 256, closed: true},
+		{b: &bucket{capacity: 100000, top: &element{}}, init_num: 0, push_num: 256, pop_num: 512, closed: true},
+		{b: &bucket{capacity: 100000, top: &element{}}, init_num: 1024, push_num: 256, pop_num: 128, closed: true},
+		{b: &bucket{capacity: 100000, top: &element{}}, init_num: 1024, push_num: 256, pop_num: 256, closed: true},
+		{b: &bucket{capacity: 100000, top: &element{}}, init_num: 1024, push_num: 256, pop_num: 512, closed: true},
+		{b: &bucket{capacity: 100000, top: &element{}}, init_num: 1024, push_num: 256, pop_num: 2048, closed: true},
+	} {
+		var (
+			d = &dialer{}
+			a = &assertions{assert.New(t), env}
+		)
+
+		// Assume that the capacity of the bucket is big enough :)
+		execute(64, env.init_num, func() {
+			conn, _ := d.dial("192.168.1.1:80")
+			env.b.push(env.b.bind(conn))
+		})
+		unused := env.b.cleanup(false)
+		a.equalf(0, unused, "0 != unused:%d", unused)
+
+		execute(64, env.push_num, func() {
+			conn, _ := d.dial("192.168.1.1:80")
+			env.b.push(env.b.bind(conn))
+		})
+		max_size := env.b.size
+
+		backup := make(chan *Conn, env.pop_num)
+		execute(64, env.pop_num, func() {
+			backup <- env.b.pop()
+		})
+
+		execute(64, env.pop_num, func() {
+			if c := <-backup; c != nil {
+				env.b.push(c)
+			}
+		})
+
+		unused = env.b.cleanup(env.closed)
+		used := max(env.push_num, min(env.pop_num, max_size))
+
+		t.Logf("%s %s max_size:%-6d used:%-6d unused:%-6d", d.str(), env.b.str(), max_size, used, unused)
+		a.equalf(0, env.b.depth, "0 != depth:%d", env.b.depth)
+		a.equalf(env.b._depth(), env.b.depth, "_depth:%d != depth:%d", env.b._depth(), env.b.depth)
+		a.equalf((*element)(nil), env.b.cut, "nil != cut:%d", env.b.cut)
+		a.equalf(env.b._size(), env.b.size, "_size:%d != size:%d", env.b._size(), env.b.size)
+		a.equalf(env.b.size, env.b.total, "size:%d != total:%d", env.b.size, env.b.total)
+		a.equalf(env.b.size, env.b.idle, "size:%d != idle:%d", env.b.size, env.b.idle)
+
+		if !env.closed {
+			a.equalf(max_size-used, unused, "(max_size:%d - used:%d) != unused:%d", max_size, used, unused)
+			a.equalf(d.total_conn, used, "total_conn:%d != used:%d", d.total_conn, used)
+			a.equalf(used, env.b.size, "used:%d != size:%d", used, env.b.size)
+		} else {
+			a.equalf(max_size, unused, "max_size:%d != unused:%d", max_size, unused)
+			a.equalf(0, d.total_conn, "0 != total_conn:%d", d.total_conn)
+		}
+	}
+}
+
+func TestCreateAndClosePool(t *testing.T) {
+	for _, env := range []struct {
+		dial                Dial
+		capacity            int
+		period              time.Duration
+		create_ok, close_ok bool
+	}{
+		{nil, 32, 2 * time.Minute, false, true},
+		{(&dialer{}).dial, -10, 2 * time.Minute, false, true},
+		{(&dialer{}).dial, 64, 5 * time.Second, false, true},
+		{(&dialer{}).dial, 32, 5 * time.Minute, true, true},
+		{(&dialer{}).dial, 0, 5 * time.Minute, true, true},
+		{(&dialer{}).dial, 32, 1 * time.Minute, true, true},
+		{(&dialer{}).dial, 0, 1 * time.Minute, true, true},
+	} {
+		a := &assertions{assert.New(t), env}
+		pool, err := New(env.dial, env.capacity, env.period)
+
+		a.equalf(env.create_ok, err == nil, "create_ok:%v not match error:%s", env.create_ok, err)
+		a.equalf(env.create_ok, pool != nil, "create_ok:%v not match pool:%v", env.create_ok, pool)
+		if env.create_ok {
+			a.equalf(sprintf("%v", env.dial), sprintf("%v", pool.dial), "env.dial:%v != pool.dail:%v", env.dial, pool.dial)
+			a.equalf(env.capacity, pool.capacity, "env.cap:%v != pool.cap:%v", env.capacity, pool.capacity)
+			a.equalf(env.period, pool.period, "env.period:%s != pool.period", env.period, pool.period)
+		} else {
+			t.Logf("create pool failed: %s", err)
+			continue
+		}
+
+		err = pool.Close()
+		a.equalf(env.close_ok, err == nil, "close_ok:%v not match error:%s", env.close_ok, err)
+
+		// Test duplicate shutdown.
+		err = pool.Close()
+		a.not_equalf(nil, err, "closing the closed pool should be failed")
+		t.Logf("closing the closed failed: %s", err)
 	}
 }
 
