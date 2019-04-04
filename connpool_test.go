@@ -261,6 +261,82 @@ func TestCreateAndClosePool(t *testing.T) {
 	}
 }
 
+func TestPool(t *testing.T) {
+	_test = true // Runs package in testing mode.
+	defer func() {
+		// Recover the package to normal mode when this function has done.
+		_test = false
+	}()
+
+	var (
+		d       = &dialer{}
+		pool, _ = New(d.dial, 64, time.Second)
+		a       = &assertions{assert.New(t), "test-pool"}
+		addr    int64
+		addrs   = []string{
+			"192.168.1.1:80",
+			"192.168.1.2:80",
+			"192.168.1.3:80",
+			"192.168.1.4:80",
+			"192.168.1.5:80",
+			"192.168.1.6:80",
+			"192.168.1.7:80",
+			"192.168.1.8:80",
+			"192.168.1.9:80",
+			"192.168.1.10:80",
+			"192.168.1.11:80",
+			"192.168.1.12:80",
+		}
+	)
+
+	for w, n, i, inc := 2, 100, 0, true; i < 100; i++ {
+		var s = &stats{}
+		execute(w, n, func() {
+			conn, err := pool.Get(addrs[int(add(&addr, 1))%len(addrs)])
+			if err == nil {
+				add(&s.succ, 1)
+			} else {
+				add(&s.fail, 1)
+			}
+			conn.Close()
+		})
+
+		back := <-pool._interrupt
+
+		logf("%s %s %s", s.str(), d.str(), sprintf(strings.Repeat("%-6s:%6d ", 3),
+			"worker", w,
+			"num", n,
+			"size", pool._size()))
+
+		a.equalf(n, s.succ, "number:%d != succ:%d", n, s.succ)
+		a.equalf(0, s.fail, "0 != fail:%d", s.fail)
+		a.equalf(d.total_conn, pool._size(), "total_conn:%d != pool.size:%d", d.total_conn, pool._size())
+		for _, b := range pool.buckets {
+			a.equalf(b._size(), b.size, "bucket._size:%d != bucket.size:%d", b._size(), b.size)
+			a.equalf(b.size, b.idle, "bucket.size:%d != bucket.idle:%d", b.size, b.idle)
+			a.equalf(b._depth(), b.depth, "bucket._depth:%d != bucket.depth:%d", b._depth(), b.depth)
+		}
+
+		close(back)
+
+		if w <= 2 || n <= 100 {
+			inc = true
+		} else if w >= 2048 || n >= 100000 {
+			inc = false
+		}
+
+		if inc {
+			w, n = w*2, n*2
+		} else {
+			w, n = w/2, n/2
+		}
+	}
+
+	pool.Close()
+	a.equalf(0, pool._size(), "pool.size:%d is not zero after closing", pool._size())
+	a.equalf(0, d.total_conn, "total_conn:%d is not zero after closing", d.total_conn)
+}
+
 /* Auxiliary Structs and Their Methods */
 
 type dialer struct {
