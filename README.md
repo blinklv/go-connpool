@@ -134,15 +134,15 @@ So you can think the bucket as a [stack][].
 
 Except for the `push` and the `pop`, there exists the third important method of the bucket: `cleanup`, which will clean up the idle connections of the bucket.
 
-1. *What does cleaning up idle connections mean?*
+*1. What does cleaning up idle connections mean?*
 
 Although all connections hold in a bucket are idle, some of which are used recently and some not. When the `cleanup` is called, it will remove the connections not used recently of the bucket and release their resources.
 
-2. *What's the meaning of not used recently?*
+*2. What's the meaning of not used recently?*
 
 The `cleanup` method of a bucket will be invoked periodically. At the beginning of a cycle, all idle connections of a bucket are thought as unused. At the ending of the cycle, some of which have been used by users but some not. We think the connections in the latter case are **not used recently**, they will be cleaned.
 
-3. *How to distinguish between used and unused connections?*
+*3. How to distinguish between used and unused connections?*
 
 I have said that you can think the bucket as a [stack][], which has a valuable property: **LIFO(last in, first out)**. This property can derive a useful conclusion: **all used connections cluster in the upper half of the bucket**. So we only need an additional `cut` pointer to separate these two types of connections.
 
@@ -150,7 +150,7 @@ I have said that you can think the bucket as a [stack][], which has a valuable p
 
 > **NOTE**: Red blocks represent used connections; yellow blocks represent unused connections.
 
-4. *How to clean up unused connectionns?*
+*4. How to clean up unused connectionns?*
 
 Assume we have a correct `cut` pointer which separates used and unused connections; the following codes show how does the `cleanup` work.
 
