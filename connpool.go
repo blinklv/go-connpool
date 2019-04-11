@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-04-01
+// Last Change: 2019-04-11
 
 // A concurrency-safe connection pool. It can be used to manage and reuse connections
 // based on the destination address of which. This design makes a pool work better with
@@ -230,7 +230,7 @@ func (pool *Pool) selectBucket(address string) (b *bucket) {
 	return
 }
 
-// Cleanup idle connections periodically.
+// Cleans up idle connections periodically.
 func (pool *Pool) autoCleanup() {
 	timer := time.NewTimer(pool.period)
 	for {
@@ -252,7 +252,7 @@ func (pool *Pool) autoCleanup() {
 	}
 }
 
-// Cleanup idle connections once.
+// Cleans up idle connections once.
 func (pool *Pool) cleanup(shutdown bool) {
 	pool.rw.RLock()
 	var buckets = make([]*bucket, 0, len(pool.buckets))
@@ -311,7 +311,7 @@ type bucket struct {
 	idle  int64 // The number of idle connections in the bucket.
 }
 
-// push a connection to the bucket. If success, returns; otherwise,
+// Puts a connection to the top of the bucket. If success, returns true; otherwise,
 // returns false when bucket is full or closed.
 func (b *bucket) push(conn *Conn) (ok bool) {
 	b.Lock()
@@ -333,7 +333,8 @@ func (b *bucket) push(conn *Conn) (ok bool) {
 	return
 }
 
-// pop a connection from the bucket. If the bucket is empty or closed, returns nil.
+// Removes the top connection of the bucket and returns it to users. If the bucket is
+// empty or closed, returns nil.
 func (b *bucket) pop() (conn *Conn) {
 	b.Lock()
 	if !b.closed && b.size > 0 {
