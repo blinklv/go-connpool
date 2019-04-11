@@ -101,7 +101,7 @@ Although the connection was dead, it doesn't mean you free its resources. We sho
 
 ![overview](img/overview.svg)
 
-Idle connections in the pool are placed to different areas named **bucket** according to their destination address; the connections of one bucket will be organized to the **singly** linked list. When users call the `Pool.Get` method, the pool will map the address parameter to a bucket at first. If the corresponded bucket is not empty, then gets a connection from which by using the `bucket.pop` method; otherwise, the `dial` function will be invoked to create a new connection which will be bound to the bucket. Of course, no matter which way, the connection will be returned to the users. After users have finished using the connection, it will be put back to the bucket by using the `bucket.push` method.
+Idle connections in the pool are placed to different areas named **bucket** according to their destination address; the connections of one bucket will be organized to the **singly** linked list. When users call the `Pool.Get` method, the pool will map the address parameter to a bucket at first. If the corresponded bucket is not empty, then gets a connection from which by using the `bucket.pop` method; otherwise, the `dial` function will be invoked to create a new connection which will be bound to the bucket. Of course, no matter which way, the connection will be returned to the users. After users have finished using the connection, it will be put back to the bucket by using the `bucket.push` method. 
 
 **Connection**
 
@@ -112,7 +112,8 @@ type Conn struct {
 }
 ```
 
-The connections returned by the pool are not exactly the same as ones returned by the `dial` function, even if you invoke `Pool.New` method. It wraps the raw `net.Conn` interface to give the `Conn.Close` method new meaning: **Not Release, But Reuse**. If the pool which a connection binds to isn't closed and has enough room, puts the connection to the pool.
+A connection gotten from the pool is not the same as ones returned by the `dial` function, even if you invoke the `Pool.New` method. Its underlying type as above, which wraps the raw `net.Conn` interface to give the `Conn.Close` method new meaning: **Not Release, But Reuse**. If the bucket which a connection binds to isn't closed and has enough room, puts the connection to it when you call the `Conn.Close` method; otherwise, release it.
+
 
 **The Basic Element of Bucket**
 
