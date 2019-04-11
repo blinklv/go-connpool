@@ -114,8 +114,7 @@ type Conn struct {
 
 A connection gotten from the pool is not the same as ones returned by the `dial` function, even if you invoke the `Pool.New` method. Its underlying type as above, which wraps the raw `net.Conn` interface to give the `Conn.Close` method new meaning: **Not Release, But Reuse**. If the bucket which a connection binds to isn't closed and has enough room, puts the connection to it when you call the `Conn.Close` method; otherwise, release it.
 
-
-**The Basic Element of Bucket**
+**Bucket**
 
 ```go
 type element struct {
@@ -124,69 +123,61 @@ type element struct {
 }
 ```
 
-The underlying structure of the bucket is the **singly** linked list; the above `element` struct represents the [node][] of which. We use an empty element (`&element{}`) instead of `nil` as the terminator of the linked list; so even if a bucket is empty, its head pointer (`top`) is not nil.
+The bucket is the core struct of the pool which stores idle connections of a specific destination address. It organizes connections into the singly linked list; the above **element** struct represents the [node][] of which. We use an empty element (`&element{}`) instead of `nil` as the terminator of the bucket; so even if a bucket is empty, its head pointer (`top`) is not nil. The bucket has two principal operations:
 
-**Working Set**
+- `push`: which puts a connection to the top of the bucket.
+- `pop`: which removes the top connection of the bucket and returns it to users.
 
-If a connection is put to the bucket by using the `bucket.push` method, we can think it has been used recently. **Working Set** is a collection of connections which are used in a period of time. If some connections of a bucket don't belong to the working set, we can reduce the size of the bucket by cleaning up these unused connections. There is a primary question we need to care about:
+So you can think the bucket as a [stack][].
 
-> How to separate **used** connections and **unused** connections?
+**Cleanup**
 
-We can allocate each element a state bit to indicate whether a connection has been used recently; all state bits are initialized to `false` (*unused*). When a connection is pushed to the bucket, its state bit is set to `true` (*used*). So the corresponding separation process is as follows (*pseudocode*):
+Except for the `push` and the `pop`, there exists the third important method of the bucket: `cleanup`, which will clean up the idle connections of the bucket.
+
+1. *What does cleaning up idle connections mean?*
+
+Although all connections hold in a bucket are idle, some of which are used recently and some not. When the `cleanup` is called, it will remove the connections not used recently of the bucket and release their resources.
+
+2. *What's the meaning of not used recently?*
+
+The `cleanup` method of a bucket will be invoked periodically. At the beginning of a cycle, all idle connections of a bucket are thought as unused. At the ending of the cycle, some of which have been used by users but some not. We think the connections in the latter case are **not used recently**, they will be cleaned.
+
+3. *How to distinguish between used and unused connections?*
+
+I have said that you can think the bucket as a [stack][], which has a valuable property: **LIFO(last in, first out)**. This property can derive a useful conclusion: **all used connections cluster in the upper half of the bucket**. So we only need an additional `cut` pointer to separate these two types of connections.
+
+![distinguish](img/distinguish.svg)
+
+> **NOTE**: Red blocks represent used connections; yellow blocks represent unused connections.
+
+4. *How to clean up unused connectionns?*
+
+Assume we have a correct `cut` pointer which separates used and unused connections; the following codes show how does the `cleanup` work.
 
 ```go
-var used_top, unused_top *element
+var cut element
 
 bucket.lock()
 
-// Iterate each element of the bucket (singly linked list).
-for e := range bucket.top {
-    if e.state {
-        add e to used_top
-    } else {
-        add e to unused_top
-    }
+// Using a temporary cut variable reserve the head of unused connections.
+cut = *(bucket.cut)         
+
+// Using an empty element overwrite the element referenced by the cut 
+// field. Cause we use an empty element as the terminator of the bucket, 
+// this operation will remove unused connections.
+*(bucket.cut) = element{}   
+
+// Assign nil to the cut field, which means resetting it to the initial state.
+bucket.cut = nil
+
+bucket.unlock()
+
+// Loop through all unused connections and release their resources.
+for e := &cut; e.conn != nil; e = e.next {
+    e.conn.Release()
 }
-bucket.top = used_top   // Replace bucket.top with used_top
-bucket.unlock()
 
-cleanup(unused_top)     // Cleanup (release) unused connections
 ```
-
-It works, but maybe not efficient. Cause the time complexity of the codes in the critical region of the bucket is **O(n)**, which means other user common operations (`bucket.push` and `bucket.pop`) will be blocked for a long time when there exist too many connections in the bucket. Have you notice that getting a connection from the bucket is called `pop` and putting a connection to the bucket is called `push`? What abstract data types have these two principal operations? It's [stack][]! The core feature of stack is **LIFO(last in, first out)**, which can lead to a useful conclusion: **All used connections cluster in the upper half of the bucket**. We only need one `cut` pointer to seperate these two types of connections. 
-
-![working set](img/working_set.svg)
-
-**Cleanup Strategy**
-
-Now, we assume we have a correct `cut` pointer;the following codes (*pseudocode*) gives you a more efficient way to cleanup unused connections.
-
-```go
-var cut *element
-
-bucket.lock()
-cut = *b.cut                // Using a temporary cut variable reserve the head of unused connections.
-(*bucket.cut) = element{}   // Using an empty element overwrite the cut field.
-bucket.unlock()
-
-cleanup(cut)                // Cleanup (release) unused connections.
-```
-
-The code in critical region of the bucket is simple (*time complexity O(1)*) but powerful (*seperate two types of conns*). Using an empty element overwrite the cut field means adjust the terminator of the bucket to the successor of the last used idle connections.
-
-**Maintain Cut Pointer**
-
-`cut` pointer makes our solution more efficient. But how does it come from? How should we maintain a correct cut field to make it always pointer to the first unused connection? We assume a bucket has been cleaned up just now; it's in the initial state and cut pointer is nil (which means all idle connections are unused).
-
-![cut pointer init](img/cut_pointer_init.svg)
-
-Both the `bucket.push` method and the `bucket.pop` method can initialize it. If the push method is called at first, the bucket will be like this.
-
-![push init cut pointer](img/push_init_cut_pointer.svg)
-
-The first used connections (*red block*) is just added. If the pop method is called at first, the situation will be different. 
-
-![pop init cut pointer](img/pop_init_cut_pointer.svg)
 
 ## License 
 
