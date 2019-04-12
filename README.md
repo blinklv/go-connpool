@@ -4,7 +4,7 @@
 [![GoDoc](https://godoc.org/github.com/blinklv/go-connpool?status.svg)](https://godoc.org/github.com/blinklv/go-connpool)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A concurrency-safe [connection pool][] package in [Go][]. It can be used to manage and reuse connections based on the destination address of which. This design makes a pool work better with some [name server][]s.
+A concurrency-safe [connection pool][] package in [Go][]. It can be used to manage and reuse connections based on the destination address of which. This design makes pool work better with some [name server][]s.
 
 ## Motivation
 
@@ -27,7 +27,7 @@ You need to create a `Pool` instance at first. There're three parameters you sho
 
 - `dial`: defines how to create a new connection.
 - `capacity`: controls the maximum idle connections to keep **per-host** (*not all hosts*).
-- `period`: specifies period between two cleanup ops, which closes some idle connections not used for a long time (*about 1 ~ 2 period*). It can't be less than 1 min in this version; otherwise, many CPU cycles are occupied by the cleanup task. I usually set it to 3 ~ 5 min, but if there exist too many resident connections in your program, this value should be larger.
+- `period`: specifies period between two cleanup ops, which closes some idle connections not used for a long time (*about 1 ~ 2 period*). It can't be less than 1 min in this version; otherwise, many CPU cycles are occupied by the cleanup task. I usually set it to 3 ~ 5 min, but if there exist too many resident connections in your program, this value should be bigger.
 
 You can make some operations on this `Pool` instance after creating it successfully. If you don't use it anymore, please remember to close it. Invoking `Pool.Close` method can ensure that all resources related to the connection pool will be released.
 
@@ -61,7 +61,7 @@ if err = handle(conn); err != nil {
 return conn.Close()
 ```
 
-`selectAddress` and `handle` function in the above example are your custom functions. The former one can return an available destination address; it's usually related to a name server. The latter one specifies how to handle the connection. How should we do if we get a dead connection, which means the connection has been closed by the peer but not detected? Can we invoke `Pool.Get` method with the same address again? It can work in typical cases. However, what if we still fail? The most terrible thing is that all idle connections corresponded to the address have been dead, which might happen when the backend server was crashed. In this lousy case, retrying will take a lot of time. `Pool.New` is an alternative method; it's more suitable for solving this problem. 
+`selectAddress` and `handle` function in the above example are your custom functions. The former can return an available destination address; it's usually related to a name server. The latter specifies how to handle the connection. How should we do if we get a dead connection, which means the connection has been closed by the peer but not detected? Can we invoke `Pool.Get` method with the same address again? It can work in typical cases. However, what if we still fail? The most terrible thing is that all idle connections corresponded to the address have been dead, which might happen when the backend server was crashed. In this lousy case, retrying will take a lot of time. `Pool.New` is an alternative method; it's more suitable for solving this problem. 
 
 ```go
 address := selectAddress()
@@ -95,7 +95,7 @@ if err := handle(conn); err != nil && isClosed(err) {
 }
 ```
 
-Although the connection was dead, it doesn't mean you free its resources. We shouldn't call its `Close` method, because the invalid connection will be likely put into the pool again. By contrast, `Conn.Release` method is better, which can free the underlying connection directly. This strategy avoids that dead connections are repeatedly used.
+Although the connection was dead, it doesn't mean you free its resources. We shouldn't call its `Close` method, because the invalid connection will be likely put into the pool again. By contrast, the `Conn.Release` method is better, which can free the underlying connection directly. This strategy avoids that dead connections are repeatedly used.
 
 ## Internal Implementation
 
