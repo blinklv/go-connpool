@@ -187,9 +187,11 @@ After the cleanup work has done, the cut pointer of the bucket is uninitialized 
 
 *5. How to maintain the cut pointer?*
 
-Let's start with a bucket as above picture. Both the `push` method and the `pop` method can initialize the cut pointer, but the practical effect will be different.
+Let's start with a bucket as above picture. Both the `push` method and the `pop` method can initialize the cut pointer, but the practical effect will be different. If the `pop` method is called at first, which means it initializes the cut pointer, then the bucket will be like the left part of the following picture. It shows the top connection is removed from the bucket and the cut pointer is set to the **new** top. The right part of the picture depicts what happens if the `push` method is called at first. A new connection becomes the top , and the cut pointer is set to the **old** top.
 
 ![initialized](img/initialized.svg)
+
+After initializing the cut pointer, the `push` method won't affect it anymore until the next cycle, cause it only increases the number of elements above the element referenced by the cut pointer. For the `pop` method, the case that the cut pointer overlaps the top pointer needs to be paid attention. The cut pointer will be adjusted to the new top pointer when this case happens unless it reaches the bottom of the bucket.
 
 ## License 
 
