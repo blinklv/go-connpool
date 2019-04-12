@@ -157,6 +157,7 @@ Assume we have a correct `cut` pointer which separates used and unused connectio
 ```go
 var cut element
 
+// Cause the bucket is an shared object, we need to lock it before accessing.
 bucket.lock()
 
 // Using a temporary cut variable reserve the head of unused connections.
@@ -167,17 +168,28 @@ cut = *(bucket.cut)
 // this operation will remove unused connections.
 *(bucket.cut) = element{}   
 
-// Assign nil to the cut field, which means resetting it to the initial state.
+// Assign nil to the cut field, which means resetting it to the uninitialized state.
 bucket.cut = nil
 
 bucket.unlock()
 
-// Loop through all unused connections and release their resources.
+// Loop through all unused connections and release their resources; this process
+// is not in the critical region so that it won't block other operations.
 for e := &cut; e.conn != nil; e = e.next {
     e.conn.Release()
 }
 
 ```
+
+After the cleanup work has done, the cut pointer of the bucket is uninitialized (as follows).
+
+![uninitialized](img/uninitialized.svg)
+
+*5. How to maintain the cut pointer?*
+
+Let's start with a bucket as above picture. Both the `push` method and the `pop` method can initialize the cut pointer, but the practical effect will be different.
+
+![initialized](img/initialized.svg)
 
 ## License 
 
