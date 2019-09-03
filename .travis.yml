@@ -5,4 +5,4 @@ sudo: false
 go_import_path: github.com/blinklv/go-connpool
 notifications:
     email: false
-script: go test -timeout=2h ./
+script: go test -v -timeout=2h ./
