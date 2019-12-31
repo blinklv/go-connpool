@@ -37,7 +37,9 @@ func Example() {
 		if conn, err = pool.New(selectAddress()); err != nil {
 			return
 		}
-		response, err = roundtrip(conn, "How long is forever?")
+		if response, err = roundtrip(conn, "How long is forever?"); err != nil {
+			return
+		}
 	}
 
 	fmt.Printf("%s", response)
@@ -136,7 +138,7 @@ func TestPackage(t *testing.T) {
 			old = exec(old)
 			timer.Reset(samplingPeriod)
 		case <-c.exit:
-			old = exec(old)
+			exec(old)
 			return
 		}
 	}
@@ -385,7 +387,7 @@ func (c *client) roundtrip(address string, request []byte) ([]byte, error) {
 		conn.Close()
 	}
 
-	return response, nil
+	return response, err
 }
 
 func (c *client) _roundtrip(conn net.Conn, request []byte) ([]byte, error) {
