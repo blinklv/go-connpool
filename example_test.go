@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2019-03-22
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-03-28
+// Last Change: 2019-12-31
 
 package connpool_test
 
@@ -121,10 +121,10 @@ func TestPackage(t *testing.T) {
 		var diff = &stats{}
 		*diff = *s
 
-		diff.client_total_req -= old.client_total_req
-		diff.client_succ_req -= old.client_succ_req
-		diff.server_total_req -= old.server_total_req
-		diff.server_succ_req -= old.server_succ_req
+		diff.clientTotalReq -= old.clientTotalReq
+		diff.clientSuccReq -= old.clientSuccReq
+		diff.serverTotalReq -= old.serverTotalReq
+		diff.serverSuccReq -= old.serverSuccReq
 
 		logf("%s\n%s", "statistics", diff)
 		return s
@@ -160,47 +160,47 @@ const (
 
 // Statistical data.
 type stats struct {
-	dial_num          int64 // Number of invoking the dial method.
-	dial_total_conn   int64 // Number of current total connections.
-	client_total_conn int64 // Number of current total connections related to the client.
-	client_idle_conn  int64 // Number of idle connections related to the client.
-	client_total_req  int64 // Number of total requests sent by the client.
-	client_succ_req   int64 // Number of success requests sent by the client.
-	client_worker_num int64 // Number of client workers.
-	server_sess_num   int64 // Number of sessions related to the server.
-	server_total_req  int64 // Number of total requests received by the server.
-	server_succ_req   int64 // Number of success requests received by the server.
+	dialNum         int64 // Number of invoking the dial method.
+	dialTotalConn   int64 // Number of current total connections.
+	clientTotalConn int64 // Number of current total connections related to the client.
+	clientIdleConn  int64 // Number of idle connections related to the client.
+	clientTotalReq  int64 // Number of total requests sent by the client.
+	clientSuccReq   int64 // Number of success requests sent by the client.
+	clientWorkerNum int64 // Number of client workers.
+	serverSessNum   int64 // Number of sessions related to the server.
+	serverTotalReq  int64 // Number of total requests received by the server.
+	serverSuccReq   int64 // Number of success requests received by the server.
 }
 
 func (s *stats) String() string {
 	return sprintf(
 		strings.Repeat("%-24s:%10d\n", 10),
-		"dial-num", s.dial_num,
-		"dial-total-conn", s.dial_total_conn,
-		"client-total-conn", s.client_total_conn,
-		"client-idle-conn", s.client_idle_conn,
-		"client-total-req", s.client_total_req,
-		"client-succ-req", s.client_succ_req,
-		"client-worker-num", s.client_worker_num,
-		"server-sess-num", s.server_sess_num,
-		"server-total-req", s.server_total_req,
-		"server-succ-req", s.server_succ_req)
+		"dial-num", s.dialNum,
+		"dial-total-conn", s.dialTotalConn,
+		"client-total-conn", s.clientTotalConn,
+		"client-idle-conn", s.clientIdleConn,
+		"client-total-req", s.clientTotalReq,
+		"client-succ-req", s.clientSuccReq,
+		"client-worker-num", s.clientWorkerNum,
+		"server-sess-num", s.serverSessNum,
+		"server-total-req", s.serverTotalReq,
+		"server-succ-req", s.serverSuccReq)
 }
 
 func (s *stats) assert(t *testing.T) {
 	const precision = 0.05
-	assert.Equalf(t, true, aequal(s.dial_total_conn, s.client_total_conn, precision),
-		"|dial_total_conn:%d - client_total_conn:%d| > %v",
-		s.dial_total_conn, s.client_total_conn, precision)
-	assert.Equalf(t, true, aequal(s.server_sess_num, s.client_total_conn, precision),
-		"|server_sess_num:%d - client_total_conn:%d| > %v",
-		s.server_sess_num, s.client_total_conn, precision)
-	assert.Equalf(t, true, aequal(s.client_total_req, s.server_total_req, precision),
-		"|client_total_req:%d - server_total_req:%d| > %v",
-		s.client_total_req, s.server_total_req, precision)
-	assert.Equalf(t, true, aequal(s.client_succ_req, s.server_succ_req, precision),
-		"|client_succ_req:%d - server_succ_req:%d| > %v",
-		s.client_succ_req, s.server_succ_req, precision)
+	assert.Equalf(t, true, aequal(s.dialTotalConn, s.clientTotalConn, precision),
+		"|dialTotalConn:%d - clientTotalConn:%d| > %v",
+		s.dialTotalConn, s.clientTotalConn, precision)
+	assert.Equalf(t, true, aequal(s.serverSessNum, s.clientTotalConn, precision),
+		"|serverSessNum:%d - clientTotalConn:%d| > %v",
+		s.serverSessNum, s.clientTotalConn, precision)
+	assert.Equalf(t, true, aequal(s.clientTotalReq, s.serverTotalReq, precision),
+		"|clientTotalReq:%d - serverTotalReq:%d| > %v",
+		s.clientTotalReq, s.serverTotalReq, precision)
+	assert.Equalf(t, true, aequal(s.clientSuccReq, s.serverSuccReq, precision),
+		"|clientSuccReq:%d - serverSuccReq:%d| > %v",
+		s.clientSuccReq, s.serverSuccReq, precision)
 }
 
 // Manage multiple server simulators.
@@ -227,9 +227,9 @@ func (ss servers) exit() {
 // Sampling from multiple servers.
 func (ss servers) sampling(s *stats) {
 	for _, svr := range ss {
-		s.server_sess_num += load(&svr.sess_num)
-		s.server_total_req += load(&svr.total_req)
-		s.server_succ_req += load(&svr.succ_req)
+		s.serverSessNum += load(&svr.sessNum)
+		s.serverTotalReq += load(&svr.totalReq)
+		s.serverSuccReq += load(&svr.succReq)
 	}
 }
 
@@ -238,9 +238,9 @@ type server struct {
 	address string // Listen address.
 	ln      net.Listener
 
-	sess_num  int64 // Number of sessions.
-	total_req int64 // Number of total requests to the server.
-	succ_req  int64 // Number of success requests to the server.
+	sessNum  int64 // Number of sessions.
+	totalReq int64 // Number of total requests to the server.
+	succReq  int64 // Number of success requests to the server.
 }
 
 func (s *server) run() {
@@ -290,37 +290,37 @@ type session struct {
 }
 
 func (sess *session) handle(conn net.Conn) {
-	add(&sess.sess_num, 1)
+	add(&sess.sessNum, 1)
 	for {
 		request, err := decode(conn)
 		if err != nil {
 			break
 		}
 
-		add(&sess.total_req, 1)
+		add(&sess.totalReq, 1)
 		if err = encode(conn, request); err != nil {
 			logf("handle connection (%s <- %s) failed (%s)",
 				conn.RemoteAddr(), conn.LocalAddr(), err)
 			break
 		}
-		add(&sess.succ_req, 1)
+		add(&sess.succReq, 1)
 
 		if handleDelay != 0 {
 			time.Sleep(handleDelay)
 		}
 	}
 	conn.Close()
-	add(&sess.sess_num, -1)
+	add(&sess.sessNum, -1)
 }
 
 // Client simulator.
 type client struct {
-	pool       *connpool.Pool
-	d          *dialer
-	s          *scheduler
-	exit       chan struct{}
-	seq        int64 // Message sequence.
-	worker_num int64 // Number of current workers.
+	pool      *connpool.Pool
+	d         *dialer
+	s         *scheduler
+	exit      chan struct{}
+	seq       int64 // Message sequence.
+	workerNum int64 // Number of current workers.
 }
 
 func (c *client) run() {
@@ -329,13 +329,13 @@ func (c *client) run() {
 	wg := &sync.WaitGroup{}
 	for i := 0; i < requestWorkerNum; i++ {
 		wg.Add(1)
-		add(&c.worker_num, 1)
+		add(&c.workerNum, 1)
 		go func() {
 			for j := 0; j < requestNum; j++ {
 				c.handle()
 			}
 			wg.Done()
-			add(&c.worker_num, -1)
+			add(&c.workerNum, -1)
 		}()
 
 		if (i+1)%workerBatch == 0 {
@@ -398,14 +398,14 @@ func (c *client) _roundtrip(conn net.Conn, request []byte) ([]byte, error) {
 
 // Sampling from the client.
 func (c *client) sampling(s *stats) {
-	s.dial_num, s.dial_total_conn, s.client_worker_num = load(&c.d.dial_num), load(&c.d.total_conn), load(&c.worker_num)
+	s.dialNum, s.dialTotalConn, s.clientWorkerNum = load(&c.d.dialNum), load(&c.d.totalConn), load(&c.workerNum)
 	for _, d := range (c.pool.Stats()).Destinations {
-		s.client_total_conn += d.Total
-		s.client_idle_conn += d.Idle
+		s.clientTotalConn += d.Total
+		s.clientIdleConn += d.Idle
 	}
 	for _, addr := range c.s.addrs {
-		s.client_total_req += load(&addr.total_req)
-		s.client_succ_req += load(&addr.succ_req)
+		s.clientTotalReq += load(&addr.totalReq)
+		s.clientSuccReq += load(&addr.succReq)
 	}
 }
 
@@ -413,9 +413,9 @@ type scheduler struct {
 	i     int64
 	n     int // Number of addresses.
 	addrs []*struct {
-		value     string
-		total_req int64 // Number of total requests to the address.
-		succ_req  int64 // Number of success requests to the address.
+		value    string
+		totalReq int64 // Number of total requests to the address.
+		succReq  int64 // Number of success requests to the address.
 	}
 }
 
@@ -423,9 +423,9 @@ type scheduler struct {
 func (s *scheduler) init(ss servers) *scheduler {
 	for _, svr := range ss {
 		s.addrs = append(s.addrs, &struct {
-			value     string
-			total_req int64
-			succ_req  int64
+			value    string
+			totalReq int64
+			succReq  int64
 		}{value: svr.address})
 	}
 	s.n = len(s.addrs)
@@ -442,27 +442,27 @@ func (s *scheduler) get() (string, error) {
 func (s *scheduler) feedback(address string, ok bool) {
 	for _, addr := range s.addrs {
 		if addr.value == address {
-			add(&addr.total_req, 1)
+			add(&addr.totalReq, 1)
 			if ok {
-				add(&addr.succ_req, 1)
+				add(&addr.succReq, 1)
 			}
 		}
 	}
 }
 
 type dialer struct {
-	dial_num   int64 // Number of invoking the dial method.
-	total_conn int64 // Number of current total connections.
+	dialNum   int64 // Number of invoking the dial method.
+	totalConn int64 // Number of current total connections.
 }
 
 // An implementation of connpool.Dial interface to create TCP connections.
 func (d *dialer) dial(address string) (net.Conn, error) {
-	add(&d.dial_num, 1)
+	add(&d.dialNum, 1)
 	conn, err := net.Dial("tcp", address)
 	if err != nil {
 		return nil, err
 	}
-	add(&d.total_conn, 1)
+	add(&d.totalConn, 1)
 	return &connection{conn, d}, nil
 }
 
@@ -473,7 +473,7 @@ type connection struct {
 }
 
 func (c *connection) Close() error {
-	add(&c.d.total_conn, -1)
+	add(&c.d.totalConn, -1)
 	return c.Conn.Close()
 }
 
