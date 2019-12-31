@@ -3,11 +3,11 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-04-11
+// Last Change: 2019-12-31
 
-// A concurrency-safe connection pool. It can be used to manage and reuse connections
-// based on the destination address of which. This design makes a pool work better with
-// some name servers.
+// Package connpool implements a concurrency-safe connection pool. It can be used to
+// manage and reuse connections based on the destination address of which. This design
+// makes a pool work better with some name servers.
 package connpool
 
 import (
@@ -22,7 +22,7 @@ import (
 // functions, and methods related to testing will have an underscore ('_') prefix.
 var _test = false
 
-// This type defines how to connect to the address. The purpose of designing this
+// Dial defines how to connect to the address. The purpose of designing this
 // type is to serve the Pool struct. It's not as common as net.Dial that you can
 // specify a network type, which means the type of connections in one pool should
 // be same. In fact, I don't think caching different kinds of connections in the
@@ -51,7 +51,7 @@ type Pool struct {
 	_interrupt chan chan struct{}
 }
 
-// Create a connection pool. The dial parameter defines how to create a new
+// New creates a connection pool. The dial parameter defines how to create a new
 // connection. You can't directly use the raw net.Dial function, but I think
 // wrapping it on the named network (tcp, udp and unix etc) is easy, as follows:
 //
@@ -119,14 +119,14 @@ func (pool *Pool) Get(address string) (net.Conn, error) {
 	return conn, nil
 }
 
-// Create a new connection by using the underlying dial function you register
+// New creates a new connection by using the underlying dial function you register
 // and bind it to the specific bucket.
 func (pool *Pool) New(address string) (net.Conn, error) {
-	if c, err := pool.dial(address); err == nil {
-		return pool.selectBucket(address).bind(c), nil
-	} else {
+	c, err := pool.dial(address)
+	if err != nil {
 		return nil, err
 	}
+	return pool.selectBucket(address).bind(c), nil
 }
 
 // Close the connection pool. It will release all idle connections in the pool.
@@ -155,7 +155,7 @@ func (pool *Pool) Close() (err error) {
 	return
 }
 
-// Pool's statistical data. You can get it from Pool.Stats method.
+// Stats represents the statistical data of Pool. You can get it from Pool.Stats method.
 type Stats struct {
 	// Timestamp identifies when this statistical was generated. It equals
 	// to the number of seconds elapsed since January 1, 1970 UTC.
@@ -165,7 +165,7 @@ type Stats struct {
 	Destinations []DestinationStats `json:"destinations"`
 }
 
-// Destination's statistical data.
+// DestinationStats represents the statistical data of each backend server.
 type DestinationStats struct {
 	// Address identifies a destination, the format of which usually likes
 	// ip:port. In fact, you can not be confined to this format and specify
@@ -180,7 +180,7 @@ type DestinationStats struct {
 	Idle int64 `json:"idle"`
 }
 
-// Get a statistical data of the Pool.
+// Stats returns the current statistical data of the calling Pool.
 func (pool *Pool) Stats() *Stats {
 	stats := &Stats{
 		Timestamp: time.Now().Unix(),
@@ -435,11 +435,11 @@ type element struct {
 	next *element
 }
 
-// An implementation of the net.Conn interface. It wraps the raw connection
-// created by the dial function you register to rewrite the original Close
-// method, which can make you put a connection to the pool implicitly by using
-// the Close method instead of calling an pool.Put method explicitly to do
-// this. The former is more natural than the latter for users.
+// Conn is an implementation of the net.Conn interface. It wraps the raw connection
+// created by the dial function you register to rewrite the original Close method,
+// which can make you put a connection to the pool implicitly by using the Close
+// method instead of calling an pool.Put method explicitly to do this. The former
+// is more natural than the latter for users.
 type Conn struct {
 	net.Conn         // The raw connection created by the dial function you register.
 	b        *bucket // The bucket to which this connection binds.
