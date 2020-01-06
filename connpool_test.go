@@ -3,18 +3,82 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2020-01-02
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2020-01-03
+// Last Change: 2020-01-06
 
 package connpool
 
 import (
 	"errors"
 	"fmt"
+	"github.com/stretchr/testify/assert"
 	"math/rand"
 	"net"
+	"reflect"
+	"strings"
 	"sync/atomic"
+	"testing"
 	"time"
 )
+
+func TestConnRelease(t *testing.T) {
+	for _, suit := range []struct {
+		Parallel int     `json:"parallel"`
+		FailProb float64 `json:"fail_prob"`
+		DialNum  int     `json:"dial_num"`
+	}{
+		{1, 0, 100},
+		{1, 0.1, 100},
+		{16, 0.1, 100},
+		{1, 0, 10000},
+		{1, 0.1, 10000},
+		{1, 0.5, 10000},
+		{16, 0.1, 10000},
+		{16, 0.2, 10000},
+	} {
+
+		var (
+			d                     = &mockDialer{failProb: suit.FailProb, rsource: defaultRSource}
+			b                     = &bucket{}
+			conns                 = make(chan net.Conn, 64)
+			dialSucc, releaseSucc int64
+		)
+
+		t.Run(encodeSuit(suit), func(t *testing.T) {
+			t.Run("dial", func(t *testing.T) {
+				t.Parallel()
+				for i := 0; i < suit.DialNum; i++ {
+
+					c, err := d.dial("127.0.0.1:80")
+					if err != nil {
+						assert.Equal(t, err, errConnectTimeout)
+						continue
+					}
+					inc(&dialSucc)
+					conns <- b.bind(c)
+				}
+				close(conns)
+			})
+
+			for p := 0; p < suit.Parallel; p++ {
+				t.Run(sprintf("conn.release-%d", p), func(t *testing.T) {
+					t.Parallel()
+					for c := range conns {
+						if err := c.(*Conn).Release(); err != nil {
+							assert.Equal(t, err, errCloseConnFailed)
+							continue
+						}
+						inc(&releaseSucc)
+					}
+				})
+			}
+		})
+
+		assert.Equal(t, dialSucc-releaseSucc, b.total)
+		assert.Equal(t, d.totalConn, b.total)
+	}
+}
+
+var defaultRSource = rand.New(rand.NewSource(0))
 
 // mockDialer contains options and metrics for connecting to an address.
 type mockDialer struct {
@@ -26,8 +90,9 @@ type mockDialer struct {
 }
 
 var (
-	errInvalidAddr    = errors.New("invalid address")
-	errConnectTimeout = errors.New("connect timeout")
+	errInvalidAddr     = errors.New("invalid address")
+	errConnectTimeout  = errors.New("connect timeout")
+	errCloseConnFailed = errors.New("close connection failed")
 )
 
 // dial connects to the address. The underlying type of the returned net.Conn is MockConn.
@@ -69,6 +134,9 @@ func (c *mockConn) Write(b []byte) (int, error) {
 }
 
 func (c *mockConn) Close() error {
+	if c.d.rsource.Float64() < c.d.failProb {
+		return errCloseConnFailed
+	}
 	dec(&c.d.totalConn)
 	return nil
 }
@@ -103,4 +171,19 @@ func inc(addr *int64) int64 {
 // dec atomically subtracts 1 to *addr and returns the new value.
 func dec(addr *int64) int64 {
 	return atomic.AddInt64(addr, -1)
+}
+
+func encodeSuit(suit interface{}) string {
+	var (
+		strs []string
+		v    = reflect.ValueOf(suit)
+		t    = v.Type()
+	)
+
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		strs = append(strs, sprintf("%s=%v", f.Tag.Get("json"), v.Field(i).Interface()))
+	}
+
+	return strings.Join(strs, ";")
 }
