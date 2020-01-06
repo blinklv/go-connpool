@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2019-12-31
+// Last Change: 2020-01-06
 
 // Package connpool implements a concurrency-safe connection pool. It can be used to
 // manage and reuse connections based on the destination address of which. This design
@@ -455,11 +455,14 @@ func (conn *Conn) Close() error {
 	return nil
 }
 
-// Release the underlying connection. It will call the Close method of the
-// net.Conn field. Although you can invoke the Close method of the net.Conn
-// field (exported) by yourself, I don't recommend you do this, cause the
-// Release method will do some extra works.
+// Release will call the Close method of the underlying net.Conn field to
+// release it instead of putting it to the pool. You shouldn't call the
+// underlying Close method manually, this will make the pool can't trace
+// the state of connections.
 func (conn *Conn) Release() error {
+	if err := conn.Conn.Close(); err != nil {
+		return err
+	}
 	atomic.AddInt64(&conn.b.total, -1)
-	return conn.Conn.Close()
+	return nil
 }
