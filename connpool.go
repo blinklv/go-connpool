@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2020-01-06
+// Last Change: 2020-01-07
 
 // Package connpool implements a concurrency-safe connection pool. It can be used to
 // manage and reuse connections based on the destination address of which. This design
@@ -445,9 +445,8 @@ type Conn struct {
 	b        *bucket // The bucket to which this connection binds.
 }
 
-// Close the connection. If the pool which this connection binds to isn't
-// closed and has enough room, puts the connection to the pool; otherwise,
-// release the underlying connection directly (call the raw Close method).
+// Close tries to put the calling connection to the pool if the pool is not closed
+// and there is enough room; otherwise, releases the underlying connection directly.
 func (conn *Conn) Close() error {
 	if !conn.b.push(conn) {
 		return conn.Release()
