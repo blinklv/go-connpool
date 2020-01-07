@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2020-01-02
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2020-01-06
+// Last Change: 2020-01-07
 
 package connpool
 
@@ -20,33 +20,44 @@ import (
 	"time"
 )
 
-func TestConnRelease(t *testing.T) {
-	for _, suit := range []struct {
-		Parallel int     `json:"parallel"`
-		FailProb float64 `json:"fail_prob"`
-		DialNum  int     `json:"dial_num"`
+func TestConnClose(t *testing.T) {
+	for _, cs := range []struct {
+		Parallel     int     `json:"parallel"`
+		FailProb     float64 `json:"fail_prob"`
+		BucketCap    int     `json:"bucket_cap"`
+		BucketClosed bool    `json:"bucket_closed"`
+		DialNum      int     `json:"dial_num"`
 	}{
-		{1, 0, 100},
-		{1, 0.1, 100},
-		{16, 0.1, 100},
-		{1, 0, 10000},
-		{1, 0.1, 10000},
-		{1, 0.5, 10000},
-		{16, 0.1, 10000},
-		{16, 0.2, 10000},
+		{1, 0, 0, false, 10000},
+		{1, 0, 0, true, 10000},
+		{1, 0, 256, false, 10000},
+		{1, 0, 256, true, 10000},
+		{1, 0.2, 0, false, 10000},
+		{1, 0.2, 0, true, 10000},
+		{1, 0.2, 256, false, 10000},
+		{1, 0.2, 256, true, 10000},
+		{16, 0, 0, false, 10000},
+		{16, 0, 0, true, 10000},
+		{16, 0, 256, false, 10000},
+		{16, 0, 256, true, 10000},
+		{16, 0.2, 0, false, 10000},
+		{16, 0.2, 0, true, 10000},
+		{16, 0.2, 256, false, 10000},
+		{16, 0.2, 256, true, 10000},
+		{16, 0, 256, false, 100},
+		{16, 0.2, 256, false, 100},
 	} {
-
 		var (
-			d                     = &mockDialer{failProb: suit.FailProb, rsource: defaultRSource}
-			b                     = &bucket{}
-			conns                 = make(chan net.Conn, 64)
-			dialSucc, releaseSucc int64
+			d                   = &mockDialer{failProb: cs.FailProb}
+			b                   = &bucket{capacity: cs.BucketCap, closed: cs.BucketClosed, top: &element{}}
+			conns               = make(chan net.Conn, 64)
+			dialSucc, closeSucc int64
 		)
 
-		t.Run(encodeSuit(suit), func(t *testing.T) {
+		t.Run(encodeCase(cs), func(t *testing.T) {
 			t.Run("dial", func(t *testing.T) {
 				t.Parallel()
-				for i := 0; i < suit.DialNum; i++ {
+				for i := 0; i < cs.DialNum; i++ {
 
 					c, err := d.dial("127.0.0.1:80")
 					if err != nil {
@@ -59,7 +70,70 @@ func TestConnRelease(t *testing.T) {
 				close(conns)
 			})
 
-			for p := 0; p < suit.Parallel; p++ {
+			for p := 0; p < cs.Parallel; p++ {
+				t.Run(sprintf("conn.close-%d", p), func(t *testing.T) {
+					t.Parallel()
+					for c := range conns {
+						if err := c.Close(); err != nil {
+							assert.Equal(t, err, errCloseConnFailed)
+							continue
+						}
+						inc(&closeSucc)
+					}
+				})
+			}
+		})
+
+		assert.Equal(t, (dialSucc-closeSucc)+b.idle, b.total)
+		assert.Equal(t, d.totalConn, b.total)
+		if cs.BucketClosed {
+			assert.Equal(t, int64(0), b.idle)
+		} else {
+			assert.LessOrEqual(t, b.idle, int64(cs.BucketCap))
+		}
+	}
+}
+
+func TestConnRelease(t *testing.T) {
+	for _, cs := range []struct {
+		Parallel int     `json:"parallel"`
+		FailProb float64 `json:"fail_prob"`
+		DialNum  int     `json:"dial_num"`
+	}{
+		{1, 0, 100},
+		{1, 0.2, 100},
+		{16, 0, 100},
+		{16, 0.2, 100},
+		{1, 0, 10000},
+		{1, 0.2, 10000},
+		{16, 0, 10000},
+		{16, 0.2, 10000},
+	} {
+
+		var (
+			d                     = &mockDialer{failProb: cs.FailProb}
+			b                     = &bucket{}
+			conns                 = make(chan net.Conn, 64)
+			dialSucc, releaseSucc int64
+		)
+
+		t.Run(encodeCase(cs), func(t *testing.T) {
+			t.Run("dial", func(t *testing.T) {
+				t.Parallel()
+				for i := 0; i < cs.DialNum; i++ {
+
+					c, err := d.dial("127.0.0.1:80")
+					if err != nil {
+						assert.Equal(t, err, errConnectTimeout)
+						continue
+					}
+					inc(&dialSucc)
+					conns <- b.bind(c)
+				}
+				close(conns)
+			})
+
+			for p := 0; p < cs.Parallel; p++ {
 				t.Run(sprintf("conn.release-%d", p), func(t *testing.T) {
 					t.Parallel()
 					for c := range conns {
@@ -78,15 +152,12 @@ func TestConnRelease(t *testing.T) {
 	}
 }
 
-var defaultRSource = rand.New(rand.NewSource(0))
-
 // mockDialer contains options and metrics for connecting to an address.
 type mockDialer struct {
-	port      int64      // Local port.
-	failProb  float64    // Failture probability.
-	rsource   *rand.Rand // Source of random numbers.
-	dialNum   int64      // The number of invoking the dial method.
-	totalConn int64      // The number of current total connections used by callers.
+	port      int64   // Local port.
+	failProb  float64 // Failture probability.
+	dialNum   int64   // The number of invoking the dial method.
+	totalConn int64   // The number of current total connections used by callers.
 }
 
 var (
@@ -102,7 +173,7 @@ func (d *mockDialer) dial(address string) (net.Conn, error) {
 		return nil, errInvalidAddr
 	}
 
-	if d.rsource.Float64() < d.failProb {
+	if rand.Float64() < d.failProb {
 		return nil, errConnectTimeout
 	}
 
@@ -134,7 +205,7 @@ func (c *mockConn) Write(b []byte) (int, error) {
 }
 
 func (c *mockConn) Close() error {
-	if c.d.rsource.Float64() < c.d.failProb {
+	if rand.Float64() < c.d.failProb {
 		return errCloseConnFailed
 	}
 	dec(&c.d.totalConn)
@@ -173,10 +244,10 @@ func dec(addr *int64) int64 {
 	return atomic.AddInt64(addr, -1)
 }
 
-func encodeSuit(suit interface{}) string {
+func encodeCase(cs interface{}) string {
 	var (
 		strs []string
-		v    = reflect.ValueOf(suit)
+		v    = reflect.ValueOf(cs)
 		t    = v.Type()
 	)
 
