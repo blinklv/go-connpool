@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2020-01-07
+// Last Change: 2020-01-13
 
 // Package connpool implements a concurrency-safe connection pool. It can be used to
 // manage and reuse connections based on the destination address of which. This design
@@ -402,14 +402,14 @@ func (b *bucket) cleanup(shutdown bool) (unused int) {
 	return
 }
 
-// Set the bucket to the closed state. (**only used in testing mode**)
+// _close sets the bucket to the closed state. (NOTE: Only for testing)
 func (b *bucket) _close() {
 	b.Lock()
 	b.closed = true
 	b.Unlock()
 }
 
-// Iterating all elements to compute its size. (**only used in testing mode**)
+// _size iterates all elements to compute the bucket's size. (NOTE: Only for testing)
 func (b *bucket) _size() int {
 	size := 0
 	for e := b.top; e.conn != nil; e = e.next {
@@ -418,8 +418,8 @@ func (b *bucket) _size() int {
 	return size
 }
 
-// Computing the size of all elements above the element referenced by the
-// cut field. (**only used in testing mode**)
+// _depth computes the size of all elements above the element referenced
+// by the cut field. (NOTE: Only for testing)
 func (b *bucket) _depth() int {
 	depth := 0
 	for e := b.top; b.cut != nil && e != b.cut; e = e.next {
@@ -428,20 +428,19 @@ func (b *bucket) _depth() int {
 	return depth
 }
 
-// The basic element of the bucket type. Multiple elements are organized
-// in linked list form.
+// element represents the basic element of the bucket type; multiple elements
+// are organized in linked list form.
 type element struct {
 	conn *Conn
 	next *element
 }
 
-// Conn is an implementation of the net.Conn interface. It wraps the raw connection
-// created by the dial function you register to rewrite the original Close method,
-// which can make you put a connection to the pool implicitly by using the Close
-// method instead of calling an pool.Put method explicitly to do this. The former
-// is more natural than the latter for users.
+// Conn is an implementation of the net.Conn interface. It rewrites the Close method
+// of the underlying connection created by the dial function, which can make you put
+// a connection to the pool implicitly by using the Close method instead of calling
+// some functions explicitly to do this.
 type Conn struct {
-	net.Conn         // The raw connection created by the dial function you register.
+	net.Conn         // The raw connection created by the dial function.
 	b        *bucket // The bucket to which this connection binds.
 }
 
