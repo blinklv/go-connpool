@@ -311,8 +311,8 @@ type bucket struct {
 	idle  int64 // The number of idle connections in the bucket.
 }
 
-// Puts a connection to the top of the bucket. If success, returns true; otherwise,
-// returns false when bucket is full or closed.
+// push puts a connection to the calling bucket. If success, returns true; otherwise,
+// returns false when the calling bucket is full or closed.
 func (b *bucket) push(conn *Conn) (ok bool) {
 	b.Lock()
 	if !b.closed && b.size < b.capacity {
