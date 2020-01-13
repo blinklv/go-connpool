@@ -3,14 +3,13 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2020-01-02
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2020-01-07
+// Last Change: 2020-01-13
 
 package connpool
 
 import (
 	"errors"
 	"fmt"
-	"github.com/stretchr/testify/assert"
 	"math/rand"
 	"net"
 	"reflect"
@@ -18,7 +17,67 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
+
+func TestBucketPush(t *testing.T) {
+	for _, cs := range []struct {
+		Parallel     int  `json:"parallel"`
+		BucketCap    int  `json:"bucket_cap"`
+		BucketClosed bool `json:"bucket_closed"`
+		DialNum      int  `json:"dial_num"`
+	}{
+		{1, 0, false, 10000},
+		{1, 0, true, 10000},
+		{1, 256, false, 10000},
+		{1, 256, true, 10000},
+		{16, 0, false, 10000},
+		{16, 0, true, 10000},
+		{16, 256, false, 10000},
+		{16, 256, true, 10000},
+		{16, 1, false, 10000},
+	} {
+		var (
+			d        = &mockDialer{}
+			b        = &bucket{capacity: cs.BucketCap, closed: cs.BucketClosed, top: &element{}}
+			n        = int64(cs.DialNum)
+			pushSucc int64
+		)
+
+		t.Run(encodeCase(cs), func(t *testing.T) {
+			for p := 0; p < cs.Parallel; p++ {
+				t.Run(sprintf("bucket.push-%d", p), func(t *testing.T) {
+					t.Parallel()
+					for dec(&n) >= 0 {
+						c, err := d.dial("127.0.0.1:80")
+						assert.Equal(t, err, nil)
+						bc := b.bind(c)
+
+						if b.push(bc) {
+							inc(&pushSucc)
+						} else {
+							bc.Release()
+						}
+					}
+				})
+			}
+		})
+
+		assert.Equal(t, b._size(), b.size)
+		assert.Equal(t, b._size(), int(b.idle))
+		assert.Equal(t, b._depth(), int(b.depth))
+		assert.Equal(t, b.size, int(b.depth))
+		assert.Equal(t, pushSucc, b.idle)
+		assert.Equal(t, pushSucc, b.total)
+		assert.Equal(t, d.totalConn, b.total)
+		if cs.BucketClosed {
+			assert.Equal(t, int64(0), b.idle)
+		} else {
+			assert.LessOrEqual(t, b.idle, int64(cs.BucketCap))
+		}
+	}
+}
 
 func TestConnClose(t *testing.T) {
 	for _, cs := range []struct {
