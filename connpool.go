@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2020-01-13
+// Last Change: 2020-01-14
 
 // Package connpool implements a concurrency-safe connection pool. It can be used to
 // manage and reuse connections based on the destination address of which. This design
@@ -333,19 +333,19 @@ func (b *bucket) push(conn *Conn) (ok bool) {
 	return
 }
 
-// Removes the top connection of the bucket and returns it to users. If the bucket is
-// empty or closed, returns nil.
+// pop removes the top connection of the bucket and returns it to users. If the bucket
+// is empty or closed, returns nil.
 func (b *bucket) pop() (conn *Conn) {
 	b.Lock()
 	if !b.closed && b.size > 0 {
 		// There are two cases we need to adjust the cut field to reference the
 		// successor of the top one:
 		//
-		// 1. The cut field is nil. Which means the pop and the push method have
+		// 1. The cut field is nil, which means the pop and the push method have
 		//    never been called since the last cleanup operation.
 		// 2. The top element is equal to the element referenced by the cut field.
-		//    Cause the top element will be returned immediately, so the cut field
-		//    must move to the successor of which.
+		//    Cause the top element will be returned immediately, the cut field
+		//    should move to the successor of which.
 		if b.top == b.cut || b.cut == nil {
 			b.cut = b.top.next
 		}
