@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2020-01-02
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2020-01-13
+// Last Change: 2020-01-14
 
 package connpool
 
@@ -72,6 +72,7 @@ func TestBucketPush(t *testing.T) {
 		assert.Equal(t, pushSucc, b.total)
 		assert.Equal(t, d.totalConn, b.total)
 		if cs.BucketClosed {
+			assert.Equal(t, int64(0), pushSucc)
 			assert.Equal(t, int64(0), b.idle)
 		} else {
 			assert.LessOrEqual(t, b.idle, int64(cs.BucketCap))
