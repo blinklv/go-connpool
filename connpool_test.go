@@ -80,6 +80,71 @@ func TestBucketPush(t *testing.T) {
 	}
 }
 
+func TestBucketPop(t *testing.T) {
+	for _, cs := range []struct {
+		Parallel     int  `json:"parallel"`
+		BucketCap    int  `json:"bucket_cap"`
+		BucketClosed bool `json:"bucket_closed"`
+		PopNum       int  `json:"pop_num"`
+	}{
+		{1, 0, false, 10000},
+		{1, 0, true, 10000},
+		{1, 256, false, 10000},
+		{1, 256, true, 10000},
+		{1, 10000, false, 10000},
+		{1, 20000, false, 10000},
+		{16, 0, false, 10000},
+		{16, 0, true, 10000},
+		{16, 256, false, 10000},
+		{16, 256, true, 10000},
+		{16, 10000, false, 10000},
+		{16, 20000, false, 10000},
+	} {
+		var (
+			d       = &mockDialer{}
+			b       = &bucket{capacity: cs.BucketCap, top: &element{}}
+			n       = int64(cs.PopNum)
+			popSucc int64
+		)
+
+		// Fill the bucket.
+		for i := 0; i < cs.BucketCap; i++ {
+			c, err := d.dial("127.0.0.1:80")
+			assert.Equal(t, err, nil)
+			b.push(b.bind(c))
+		}
+
+		if cs.BucketClosed {
+			b._close()
+		}
+
+		t.Run(encodeCase(cs), func(t *testing.T) {
+			for p := 0; p < cs.Parallel; p++ {
+				t.Run(sprintf("bucket.pop-%d", p), func(t *testing.T) {
+					t.Parallel()
+					for dec(&n) >= 0 {
+						if c := b.pop(); c != nil {
+							inc(&popSucc)
+							c.Release()
+						}
+					}
+				})
+			}
+		})
+
+		assert.Equal(t, b._size(), b.size)
+		assert.Equal(t, b._size(), int(b.idle))
+		assert.Equal(t, b._depth(), int(b.depth))
+		assert.Equal(t, b.size, int(b.depth))
+		assert.Equal(t, int64(cs.BucketCap)-b.idle, popSucc)
+		assert.Equal(t, d.totalConn, b.total)
+		if cs.BucketClosed {
+			assert.Equal(t, int64(0), popSucc)
+			assert.Equal(t, int64(cs.BucketCap), b.idle)
+		}
+	}
+}
+
 func TestConnClose(t *testing.T) {
 	for _, cs := range []struct {
 		Parallel     int     `json:"parallel"`
