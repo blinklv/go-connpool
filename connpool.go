@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2020-01-14
+// Last Change: 2020-01-16
 
 // Package connpool implements a concurrency-safe connection pool. It can be used to
 // manage and reuse connections based on the destination address of which. This design
@@ -362,24 +362,24 @@ func (b *bucket) pop() (conn *Conn) {
 	return
 }
 
-// A connection should be bound to the specific bucket when it's created.
+// bind binds a connection to the calling bucket.
 func (b *bucket) bind(conn net.Conn) *Conn {
 	atomic.AddInt64(&b.total, 1)
 	return &Conn{conn, b}
 }
 
-// Cleans up the idle connections of the bucket and returns the number of closed
-// connections. If the shutdown parameter is false, only releases connections not
-// used rencently; otherwise, releases all.
+// cleanup cleans up the idle connections of the calling bucket and returns the
+// number of released connections. If the shutdown parameter is false, only
+// releases connections not used rencently; otherwise, releases all.
 func (b *bucket) cleanup(shutdown bool) (unused int) {
 	var cut element
 
 	b.Lock()
 	b.closed = shutdown
 
-	// I use an empty element to represent the end of a linked list; it's a mark
-	// node which tells you that you reach the end. The primary reason I don't use
-	// the nil to represent the end is distinguishing it from the beginning.
+	// Cause I have already used nil to represent the beginning of the linked list, I
+	// use an empty element to represent the end of which. This design can distinguish
+	// between beginning and end.
 	if !shutdown && b.cut != nil {
 		cut, *b.cut = *b.cut, element{}
 	} else {
