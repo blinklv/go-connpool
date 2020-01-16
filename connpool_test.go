@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2020-01-02
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2020-01-14
+// Last Change: 2020-01-16
 
 package connpool
 
@@ -51,7 +51,7 @@ func TestBucketPush(t *testing.T) {
 					t.Parallel()
 					for dec(&n) >= 0 {
 						c, err := d.dial("127.0.0.1:80")
-						assert.Equal(t, err, nil)
+						assert.Equal(t, nil, err)
 						bc := b.bind(c)
 
 						if b.push(bc) {
@@ -75,7 +75,7 @@ func TestBucketPush(t *testing.T) {
 			assert.Equal(t, int64(0), pushSucc)
 			assert.Equal(t, int64(0), b.idle)
 		} else {
-			assert.LessOrEqual(t, b.idle, int64(cs.BucketCap))
+			assert.LessOrEqual(t, int64(cs.BucketCap), b.idle)
 		}
 	}
 }
@@ -110,7 +110,7 @@ func TestBucketPop(t *testing.T) {
 		// Fill the bucket.
 		for i := 0; i < cs.BucketCap; i++ {
 			c, err := d.dial("127.0.0.1:80")
-			assert.Equal(t, err, nil)
+			assert.Equal(t, nil, err)
 			b.push(b.bind(c))
 		}
 
@@ -142,6 +142,68 @@ func TestBucketPop(t *testing.T) {
 			assert.Equal(t, int64(0), popSucc)
 			assert.Equal(t, int64(cs.BucketCap), b.idle)
 		}
+	}
+}
+
+func TestBucketCleanup(t *testing.T) {
+	for _, cs := range []struct {
+		Shutdown    bool `json:"shutdown"`
+		BucketCap   int  `json:"bucket_cap"`
+		BucketDepth int  `json:"bucket_depth"`
+	}{
+		{false, 0, 0},
+		{false, 10000, 0},
+		{false, 10000, 1},
+		{false, 10000, 5000},
+		{false, 10000, 10000},
+		{true, 0, 0},
+		{true, 10000, 0},
+		{true, 10000, 1},
+		{true, 10000, 5000},
+		{true, 10000, 10000},
+	} {
+		var (
+			d = &mockDialer{}
+			b = &bucket{capacity: cs.BucketCap, top: &element{}}
+		)
+
+		// Fill the bucket.
+		for i := 0; i < cs.BucketCap; i++ {
+			c, err := d.dial("127.0.0.1:80")
+			assert.Equal(t, nil, err)
+			b.push(b.bind(c))
+		}
+
+		// Adjust the depth of the bucket.
+		assert.Equal(t, 0, b.cleanup(false))
+
+		conns := make([]*Conn, 0, cs.BucketDepth)
+		for i := 0; i < cs.BucketDepth; i++ {
+			conns = append(conns, b.pop())
+		}
+		for _, conn := range conns {
+			b.push(conn)
+		}
+		assert.Equal(t, cs.BucketDepth, b.depth)
+
+		t.Run(encodeCase(cs), func(t *testing.T) {
+			newsize := int(b.depth)
+			unused := b.cleanup(cs.Shutdown)
+
+			assert.Equal(t, b._size(), b.size)
+			assert.Equal(t, b._size(), int(b.idle))
+			assert.Equal(t, b._depth(), int(b.depth))
+			assert.Equal(t, d.totalConn, b.total)
+			assert.Equal(t, 0, int(b.depth))
+			assert.Equal(t, (*element)(nil), b.cut)
+			if cs.Shutdown {
+				assert.Equal(t, cs.BucketCap, unused)
+				assert.Equal(t, 0, b.size)
+			} else {
+				assert.Equal(t, cs.BucketCap-cs.BucketDepth, unused)
+				assert.Equal(t, newsize, b.size)
+			}
+		})
 	}
 }
 
@@ -186,7 +248,7 @@ func TestConnClose(t *testing.T) {
 
 					c, err := d.dial("127.0.0.1:80")
 					if err != nil {
-						assert.Equal(t, err, errConnectTimeout)
+						assert.Equal(t, errConnectTimeout, err)
 						continue
 					}
 					inc(&dialSucc)
@@ -200,7 +262,7 @@ func TestConnClose(t *testing.T) {
 					t.Parallel()
 					for c := range conns {
 						if err := c.Close(); err != nil {
-							assert.Equal(t, err, errCloseConnFailed)
+							assert.Equal(t, errCloseConnFailed, err)
 							continue
 						}
 						inc(&closeSucc)
@@ -249,7 +311,7 @@ func TestConnRelease(t *testing.T) {
 
 					c, err := d.dial("127.0.0.1:80")
 					if err != nil {
-						assert.Equal(t, err, errConnectTimeout)
+						assert.Equal(t, errConnectTimeout, err)
 						continue
 					}
 					inc(&dialSucc)
@@ -263,7 +325,7 @@ func TestConnRelease(t *testing.T) {
 					t.Parallel()
 					for c := range conns {
 						if err := c.(*Conn).Release(); err != nil {
-							assert.Equal(t, err, errCloseConnFailed)
+							assert.Equal(t, errCloseConnFailed, err)
 							continue
 						}
 						inc(&releaseSucc)
