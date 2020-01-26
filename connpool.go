@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2020-01-16
+// Last Change: 2020-01-26
 
 // Package connpool implements a concurrency-safe connection pool. It can be used to
 // manage and reuse connections based on the destination address of which. This design
@@ -395,11 +395,17 @@ func (b *bucket) cleanup(shutdown bool) (unused int) {
 	b.Unlock()
 
 	for e := &cut; e.conn != nil; e = e.next {
-		e.conn.Release()
-		unused++
+		// NOTE: I don't do anything more when release a connection failed,
+		// although it might cause resource leaks in some particular cases.
+		// At first, I think I can push it to the bucket again. But what if
+		// push failed? I have to release it again. This constructs a circular
+		// invocation and might never end.
+		if e.conn.Release() == nil {
+			unused++
+		}
 	}
 
-	return
+	return unused
 }
 
 // _close sets the bucket to the closed state. (NOTE: Only for testing)
