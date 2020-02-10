@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2020-01-26
+// Last Change: 2020-02-10
 
 // Package connpool implements a concurrency-safe connection pool. It can be used to
 // manage and reuse connections based on the destination address of which. This design
@@ -146,7 +146,7 @@ func (pool *Pool) Close() (err error) {
 
 	if err == nil {
 		// I must guarantee the following statements are only executed once; otherwise,
-		// it will be blocked forever at the second time (3re, 4th, ...) cause there is
+		// it will be blocked forever at the second time (3rd, 4th, ...) cause there is
 		// no reader of the pool.exit channel.
 		done := make(chan struct{})
 		pool.exit <- done
