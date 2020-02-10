@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2020-01-02
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2020-01-16
+// Last Change: 2020-02-10
 
 package connpool
 
@@ -20,6 +20,36 @@ import (
 
 	"github.com/stretchr/testify/assert"
 )
+
+func TestNew(t *testing.T) {
+	for _, cs := range []struct {
+		Dial     Dial          `json:"dial"`
+		Capacity int           `json:"capacity"`
+		Period   time.Duration `json:"period"`
+		Error    string        `json:"error"`
+	}{
+		{nil, 32, 5 * time.Minute, "dial can't be nil"},
+		{(&mockDialer{}).dial, -10, 5 * time.Minute, "capacity (-10) can't be less than zero"},
+		{(&mockDialer{}).dial, 32, time.Second, "cleanup period (1s) can't be less than 1 min"},
+		{(&mockDialer{}).dial, 32, 5 * time.Minute, "nil"},
+	} {
+		t.Run(encodeCase(cs), func(t *testing.T) {
+			pool, err := New(cs.Dial, cs.Capacity, cs.Period)
+			if cs.Error == "nil" {
+				assert.NotNil(t, pool)
+				assert.Nil(t, err)
+				assert.NotNil(t, pool.dial)
+				assert.GreaterOrEqual(t, pool.capacity, 0)
+				assert.NotNil(t, pool.buckets)
+				assert.NotNil(t, pool.exit)
+				assert.False(t, pool.closed)
+			} else {
+				assert.Nil(t, pool)
+				assert.EqualError(t, err, cs.Error)
+			}
+		})
+	}
+}
 
 func TestBucketPush(t *testing.T) {
 	for _, cs := range []struct {
