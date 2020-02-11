@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2020-01-02
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2020-02-10
+// Last Change: 2020-02-11
 
 package connpool
 
@@ -49,6 +49,18 @@ func TestNew(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPoolClose(t *testing.T) {
+	pool, err := New((&mockDialer{}).dial, 32, 5*time.Minute)
+	assert.NotNil(t, pool)
+	assert.Nil(t, err)
+
+	err = pool.Close()
+	assert.Nil(t, err)
+
+	err = pool.Close()
+	assert.EqualError(t, err, "connection pool is already closed")
 }
 
 func TestBucketPush(t *testing.T) {
