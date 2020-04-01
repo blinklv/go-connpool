@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2020-01-02
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2020-02-11
+// Last Change: 2020-04-01
 
 package connpool
 
@@ -46,6 +46,46 @@ func TestNew(t *testing.T) {
 			} else {
 				assert.Nil(t, pool)
 				assert.EqualError(t, err, cs.Error)
+			}
+		})
+	}
+}
+
+func TestPoolSelectBucket(t *testing.T) {
+	for _, cs := range []struct {
+		Parallel  int `json:"parallel"`
+		SelectNum int `json:"select_num"`
+	}{
+		{1, 1000},
+		{1, 1000000},
+		{32, 1000},
+		{32, 1000000},
+	} {
+		t.Run(encodeCase(cs), func(t *testing.T) {
+			pool, err := New((&mockDialer{}).dial, 32, 5*time.Minute)
+			assert.Nil(t, err)
+
+			var (
+				buckets = make([]*bucket, 16)
+				n       = int64(cs.SelectNum)
+			)
+
+			for p := 0; p < cs.Parallel; p++ {
+				t.Run(sprintf("pool.selectBucket-%d", p), func(t *testing.T) {
+					t.Parallel()
+					for dec(&n) >= 0 {
+						i := rand.Intn(16)
+						address := sprintf("192.168.0.%d:80", i)
+						b := pool.selectBucket(address)
+						assert.NotNil(t, b)
+
+						// Accessing to buckets concurrently doesn't matter.
+						if buckets[i] == nil {
+							buckets[i] = b
+						}
+						assert.True(t, buckets[i] == b)
+					}
+				})
 			}
 		})
 	}
