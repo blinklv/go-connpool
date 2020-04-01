@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2020-02-10
+// Last Change: 2020-04-01
 
 // Package connpool implements a concurrency-safe connection pool. It can be used to
 // manage and reuse connections based on the destination address of which. This design
@@ -202,15 +202,16 @@ func (pool *Pool) Stats() *Stats {
 	return stats
 }
 
-// select a bucket for the address. If it doesn't exist, create a new one; which
-// means the return value of this function can't be nil.
+// selectBucket selects a bucket for the address. If there is no bucket exists
+// for the address, a new one will be created, which means this method won't
+// return a nil.
 func (pool *Pool) selectBucket(address string) (b *bucket) {
-	// At first, get a bucket from the buckets.
+	// At first, get a bucket from all existing buckets.
 	pool.rw.RLock()
 	b = pool.buckets[address]
 	pool.rw.RUnlock()
 
-	// This conditional statement can save much time in most cases. Because the bucket
+	// This conditional statement can save much time in most cases. Cause the bucket
 	// for the address has already existed in normal case; otherwise, we have to add
 	// write-lock every time.
 	if b == nil {
