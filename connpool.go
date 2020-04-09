@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2020-04-01
+// Last Change: 2020-04-09
 
 // Package connpool implements a concurrency-safe connection pool. It can be used to
 // manage and reuse connections based on the destination address of which. This design
@@ -119,8 +119,8 @@ func (pool *Pool) Get(address string) (net.Conn, error) {
 	return conn, nil
 }
 
-// New creates a new connection by using the underlying dial function you register
-// and bind it to the specific bucket.
+// New creates a new connection by using the underlying dial function and binds
+// it to the corresponded bucket.
 func (pool *Pool) New(address string) (net.Conn, error) {
 	c, err := pool.dial(address)
 	if err != nil {
@@ -278,7 +278,7 @@ func (pool *Pool) _wait() {
 	<-back
 }
 
-// Returns the number of idle connections of the pool. (**only used in testing mode**)
+// _size returns the number of idle connections of the pool. (NOTE: Only for testing)
 func (pool *Pool) _size() (size int) {
 	for _, b := range pool.buckets {
 		size += b.size
