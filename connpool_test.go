@@ -173,45 +173,48 @@ func TestBucketPush(t *testing.T) {
 		{16, 256, true, 10000},
 		{16, 1, false, 10000},
 	} {
-		var (
-			d        = &mockDialer{}
-			b        = &bucket{capacity: cs.BucketCap, closed: cs.BucketClosed, top: &element{}}
-			n        = int64(cs.DialNum)
-			pushSucc int64
-		)
-
 		t.Run(encodeCase(cs), func(t *testing.T) {
-			for p := 0; p < cs.Parallel; p++ {
-				t.Run(sprintf("bucket.push-%d", p), func(t *testing.T) {
-					t.Parallel()
-					for dec(&n) >= 0 {
-						c, err := d.dial("127.0.0.1:80")
-						assert.Equal(t, nil, err)
-						bc := b.bind(c)
+			var (
+				d        = &mockDialer{}
+				b        = &bucket{capacity: cs.BucketCap, closed: cs.BucketClosed, top: &element{}}
+				n        = int64(cs.DialNum)
+				pushSucc int64
+			)
 
-						if b.push(bc) {
-							inc(&pushSucc)
-						} else {
-							bc.Release()
+			t.Run("group", func(t *testing.T) {
+				for p := 0; p < cs.Parallel; p++ {
+					t.Run(sprintf("bucket.push-%d", p), func(t *testing.T) {
+						t.Parallel()
+						for dec(&n) >= 0 {
+							c, err := d.dial("127.0.0.1:80")
+							assert.Equal(t, nil, err)
+							bc := b.bind(c)
+
+							if b.push(bc) {
+								inc(&pushSucc)
+							} else {
+								bc.Release()
+							}
 						}
-					}
-				})
-			}
-		})
+					})
+				}
+			})
 
-		assert.Equal(t, b._size(), b.size)
-		assert.Equal(t, b._size(), int(b.idle))
-		assert.Equal(t, b._depth(), int(b.depth))
-		assert.Equal(t, b.size, int(b.depth))
-		assert.Equal(t, pushSucc, b.idle)
-		assert.Equal(t, pushSucc, b.total)
-		assert.Equal(t, d.totalConn, b.total)
-		if cs.BucketClosed {
-			assert.Equal(t, int64(0), pushSucc)
-			assert.Equal(t, int64(0), b.idle)
-		} else {
-			assert.LessOrEqual(t, int64(cs.BucketCap), b.idle)
-		}
+			assert.Equal(t, b._size(), int(b.idle))
+			assert.Equal(t, b._depth(), int(b.depth))
+			assert.Equal(t, b.size, int(b.depth))
+			assert.Equal(t, pushSucc, b.idle)
+			assert.Equal(t, pushSucc, b.total)
+			assert.Equal(t, d.totalConn, b.total)
+			if cs.BucketClosed {
+				assert.Equal(t, int64(0), pushSucc)
+				assert.Equal(t, int64(0), b.idle)
+			} else {
+				assert.LessOrEqual(t, int64(cs.BucketCap), b.idle)
+			}
+
+			assert.Equal(t, b._size(), b.size)
+		})
 	}
 }
 
@@ -235,48 +238,50 @@ func TestBucketPop(t *testing.T) {
 		{16, 10000, false, 10000},
 		{16, 20000, false, 10000},
 	} {
-		var (
-			d       = &mockDialer{}
-			b       = &bucket{capacity: cs.BucketCap, top: &element{}}
-			n       = int64(cs.PopNum)
-			popSucc int64
-		)
-
-		// Fill the bucket.
-		for i := 0; i < cs.BucketCap; i++ {
-			c, err := d.dial("127.0.0.1:80")
-			assert.Equal(t, nil, err)
-			b.push(b.bind(c))
-		}
-
-		if cs.BucketClosed {
-			b._close()
-		}
-
 		t.Run(encodeCase(cs), func(t *testing.T) {
-			for p := 0; p < cs.Parallel; p++ {
-				t.Run(sprintf("bucket.pop-%d", p), func(t *testing.T) {
-					t.Parallel()
-					for dec(&n) >= 0 {
-						if c := b.pop(); c != nil {
-							inc(&popSucc)
-							c.Release()
+			var (
+				d       = &mockDialer{}
+				b       = &bucket{capacity: cs.BucketCap, top: &element{}}
+				n       = int64(cs.PopNum)
+				popSucc int64
+			)
+
+			// Fill the bucket.
+			for i := 0; i < cs.BucketCap; i++ {
+				c, err := d.dial("127.0.0.1:80")
+				assert.Equal(t, nil, err)
+				b.push(b.bind(c))
+			}
+
+			if cs.BucketClosed {
+				b._close()
+			}
+
+			t.Run("group", func(t *testing.T) {
+				for p := 0; p < cs.Parallel; p++ {
+					t.Run(sprintf("bucket.pop-%d", p), func(t *testing.T) {
+						t.Parallel()
+						for dec(&n) >= 0 {
+							if c := b.pop(); c != nil {
+								inc(&popSucc)
+								c.Release()
+							}
 						}
-					}
-				})
+					})
+				}
+			})
+
+			assert.Equal(t, b._size(), b.size)
+			assert.Equal(t, b._size(), int(b.idle))
+			assert.Equal(t, b._depth(), int(b.depth))
+			assert.Equal(t, b.size, int(b.depth))
+			assert.Equal(t, int64(cs.BucketCap)-b.idle, popSucc)
+			assert.Equal(t, d.totalConn, b.total)
+			if cs.BucketClosed {
+				assert.Equal(t, int64(0), popSucc)
+				assert.Equal(t, int64(cs.BucketCap), b.idle)
 			}
 		})
-
-		assert.Equal(t, b._size(), b.size)
-		assert.Equal(t, b._size(), int(b.idle))
-		assert.Equal(t, b._depth(), int(b.depth))
-		assert.Equal(t, b.size, int(b.depth))
-		assert.Equal(t, int64(cs.BucketCap)-b.idle, popSucc)
-		assert.Equal(t, d.totalConn, b.total)
-		if cs.BucketClosed {
-			assert.Equal(t, int64(0), popSucc)
-			assert.Equal(t, int64(cs.BucketCap), b.idle)
-		}
 	}
 }
 
@@ -297,31 +302,31 @@ func TestBucketCleanup(t *testing.T) {
 		{true, 10000, 5000},
 		{true, 10000, 10000},
 	} {
-		var (
-			d = &mockDialer{}
-			b = &bucket{capacity: cs.BucketCap, top: &element{}}
-		)
-
-		// Fill the bucket.
-		for i := 0; i < cs.BucketCap; i++ {
-			c, err := d.dial("127.0.0.1:80")
-			assert.Equal(t, nil, err)
-			b.push(b.bind(c))
-		}
-
-		// Adjust the depth of the bucket.
-		assert.Equal(t, 0, b.cleanup(false))
-
-		conns := make([]*Conn, 0, cs.BucketDepth)
-		for i := 0; i < cs.BucketDepth; i++ {
-			conns = append(conns, b.pop())
-		}
-		for _, conn := range conns {
-			b.push(conn)
-		}
-		assert.Equal(t, cs.BucketDepth, b.depth)
-
 		t.Run(encodeCase(cs), func(t *testing.T) {
+			var (
+				d = &mockDialer{}
+				b = &bucket{capacity: cs.BucketCap, top: &element{}}
+			)
+
+			// Fill the bucket.
+			for i := 0; i < cs.BucketCap; i++ {
+				c, err := d.dial("127.0.0.1:80")
+				assert.Equal(t, nil, err)
+				b.push(b.bind(c))
+			}
+
+			// Adjust the depth of the bucket.
+			assert.Equal(t, 0, b.cleanup(false))
+
+			conns := make([]*Conn, 0, cs.BucketDepth)
+			for i := 0; i < cs.BucketDepth; i++ {
+				conns = append(conns, b.pop())
+			}
+			for _, conn := range conns {
+				b.push(conn)
+			}
+			assert.Equal(t, cs.BucketDepth, b.depth)
+
 			newsize := int(b.depth)
 			unused := b.cleanup(cs.Shutdown)
 
@@ -369,50 +374,52 @@ func TestConnClose(t *testing.T) {
 		{16, 0, 256, false, 100},
 		{16, 0.2, 256, false, 100},
 	} {
-		var (
-			d                   = &mockDialer{failProb: cs.FailProb}
-			b                   = &bucket{capacity: cs.BucketCap, closed: cs.BucketClosed, top: &element{}}
-			conns               = make(chan net.Conn, 64)
-			dialSucc, closeSucc int64
-		)
-
 		t.Run(encodeCase(cs), func(t *testing.T) {
-			t.Run("dial", func(t *testing.T) {
-				t.Parallel()
-				for i := 0; i < cs.DialNum; i++ {
+			var (
+				d                   = &mockDialer{failProb: cs.FailProb}
+				b                   = &bucket{capacity: cs.BucketCap, closed: cs.BucketClosed, top: &element{}}
+				conns               = make(chan net.Conn, 64)
+				dialSucc, closeSucc int64
+			)
 
-					c, err := d.dial("127.0.0.1:80")
-					if err != nil {
-						assert.Equal(t, errConnectTimeout, err)
-						continue
-					}
-					inc(&dialSucc)
-					conns <- b.bind(c)
-				}
-				close(conns)
-			})
-
-			for p := 0; p < cs.Parallel; p++ {
-				t.Run(sprintf("conn.close-%d", p), func(t *testing.T) {
+			t.Run("group", func(t *testing.T) {
+				t.Run("dial", func(t *testing.T) {
 					t.Parallel()
-					for c := range conns {
-						if err := c.Close(); err != nil {
-							assert.Equal(t, errCloseConnFailed, err)
+					for i := 0; i < cs.DialNum; i++ {
+
+						c, err := d.dial("127.0.0.1:80")
+						if err != nil {
+							assert.Equal(t, errConnectTimeout, err)
 							continue
 						}
-						inc(&closeSucc)
+						inc(&dialSucc)
+						conns <- b.bind(c)
 					}
+					close(conns)
 				})
+
+				for p := 0; p < cs.Parallel; p++ {
+					t.Run(sprintf("conn.close-%d", p), func(t *testing.T) {
+						t.Parallel()
+						for c := range conns {
+							if err := c.Close(); err != nil {
+								assert.Equal(t, errCloseConnFailed, err)
+								continue
+							}
+							inc(&closeSucc)
+						}
+					})
+				}
+			})
+
+			assert.Equal(t, (dialSucc-closeSucc)+b.idle, b.total)
+			assert.Equal(t, d.totalConn, b.total)
+			if cs.BucketClosed {
+				assert.Equal(t, int64(0), b.idle)
+			} else {
+				assert.LessOrEqual(t, b.idle, int64(cs.BucketCap))
 			}
 		})
-
-		assert.Equal(t, (dialSucc-closeSucc)+b.idle, b.total)
-		assert.Equal(t, d.totalConn, b.total)
-		if cs.BucketClosed {
-			assert.Equal(t, int64(0), b.idle)
-		} else {
-			assert.LessOrEqual(t, b.idle, int64(cs.BucketCap))
-		}
 	}
 }
 
@@ -432,45 +439,47 @@ func TestConnRelease(t *testing.T) {
 		{16, 0.2, 10000},
 	} {
 
-		var (
-			d                     = &mockDialer{failProb: cs.FailProb}
-			b                     = &bucket{}
-			conns                 = make(chan net.Conn, 64)
-			dialSucc, releaseSucc int64
-		)
-
 		t.Run(encodeCase(cs), func(t *testing.T) {
-			t.Run("dial", func(t *testing.T) {
-				t.Parallel()
-				for i := 0; i < cs.DialNum; i++ {
+			var (
+				d                     = &mockDialer{failProb: cs.FailProb}
+				b                     = &bucket{}
+				conns                 = make(chan net.Conn, 64)
+				dialSucc, releaseSucc int64
+			)
 
-					c, err := d.dial("127.0.0.1:80")
-					if err != nil {
-						assert.Equal(t, errConnectTimeout, err)
-						continue
-					}
-					inc(&dialSucc)
-					conns <- b.bind(c)
-				}
-				close(conns)
-			})
-
-			for p := 0; p < cs.Parallel; p++ {
-				t.Run(sprintf("conn.release-%d", p), func(t *testing.T) {
+			t.Run("group", func(t *testing.T) {
+				t.Run("dial", func(t *testing.T) {
 					t.Parallel()
-					for c := range conns {
-						if err := c.(*Conn).Release(); err != nil {
-							assert.Equal(t, errCloseConnFailed, err)
+					for i := 0; i < cs.DialNum; i++ {
+
+						c, err := d.dial("127.0.0.1:80")
+						if err != nil {
+							assert.Equal(t, errConnectTimeout, err)
 							continue
 						}
-						inc(&releaseSucc)
+						inc(&dialSucc)
+						conns <- b.bind(c)
 					}
+					close(conns)
 				})
-			}
-		})
 
-		assert.Equal(t, dialSucc-releaseSucc, b.total)
-		assert.Equal(t, d.totalConn, b.total)
+				for p := 0; p < cs.Parallel; p++ {
+					t.Run(sprintf("conn.release-%d", p), func(t *testing.T) {
+						t.Parallel()
+						for c := range conns {
+							if err := c.(*Conn).Release(); err != nil {
+								assert.Equal(t, errCloseConnFailed, err)
+								continue
+							}
+							inc(&releaseSucc)
+						}
+					})
+				}
+			})
+
+			assert.Equal(t, dialSucc-releaseSucc, b.total)
+			assert.Equal(t, d.totalConn, b.total)
+		})
 	}
 }
 
