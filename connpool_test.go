@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2020-01-02
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2020-04-01
+// Last Change: 2020-04-09
 
 package connpool
 
@@ -47,6 +47,59 @@ func TestNew(t *testing.T) {
 				assert.Nil(t, pool)
 				assert.EqualError(t, err, cs.Error)
 			}
+		})
+	}
+}
+
+func TestPoolNew(t *testing.T) {
+	for _, cs := range []struct {
+		Parallel int `json:"parallel"`
+		NewNum   int `json:"new_num"`
+	}{
+		{1, 0},
+		{1, 1000},
+		{1, 100000},
+		{32, 10000},
+		{32, 10000},
+	} {
+		t.Run(encodeCase(cs), func(t *testing.T) {
+			var (
+				dialer = &mockDialer{}
+				n      = int64(cs.NewNum)
+			)
+
+			pool, err := New(dialer.dial, 32, 5*time.Minute)
+			assert.Nil(t, err)
+			assert.NotNil(t, pool)
+
+			conns := make([]net.Conn, int(n))
+
+			t.Run("group", func(t *testing.T) {
+				for p := 0; p < cs.Parallel; p++ {
+					t.Run(sprintf("pool.New-%d", p), func(t *testing.T) {
+						t.Parallel()
+						for i := dec(&n); i >= 0; i = dec(&n) {
+							k := rand.Intn(16)
+							address := sprintf("192.168.0.%d:80", k)
+							c, err := pool.New(address)
+							assert.Nil(t, err)
+							assert.NotNil(t, c)
+							conns[i] = c
+						}
+					})
+				}
+			})
+
+			assert.Equal(t, int64(cs.NewNum), dialer.totalConn)
+			assert.Equal(t, 0, pool._size())
+
+			for _, c := range conns {
+				if c != nil {
+					assert.Nil(t, c.Close())
+				}
+			}
+			assert.Equal(t, dialer.totalConn, int64(pool._size()))
+			assert.LessOrEqual(t, pool._size(), 32*16)
 		})
 	}
 }
