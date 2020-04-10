@@ -51,9 +51,64 @@ func TestNew(t *testing.T) {
 	}
 }
 
+func TestPoolGet(t *testing.T) {
+	// Exception case.
+	t.Run("exception case", func(t *testing.T) {
+		dialer := &mockDialer{failProb: 1}
+		pool, err := New(dialer.dial, 32, 5*time.Minute)
+		assert.Nil(t, err)
+		assert.NotNil(t, pool)
+		conn, err := pool.Get("192.168.1.1:80")
+		assert.NotNil(t, err)
+		assert.Nil(t, conn)
+	})
+
+	// Normal cases.
+	for _, cs := range []struct {
+		Parallel int `json:"parallel"`
+		GetNum   int `json:"get_num"`
+	}{
+		{1, 0},
+		{1, 1000},
+		{1, 100000},
+		{32, 10000},
+		{32, 10000},
+	} {
+		t.Run(encodeCase(cs), func(t *testing.T) {
+			var (
+				dialer = &mockDialer{}
+				n      = int64(cs.GetNum)
+			)
+
+			pool, err := New(dialer.dial, 32, 5*time.Minute)
+			assert.Nil(t, err)
+			assert.NotNil(t, pool)
+
+			t.Run("group", func(t *testing.T) {
+				for p := 0; p < cs.Parallel; p++ {
+					t.Run(sprintf("pool.Get-%d", p), func(t *testing.T) {
+						t.Parallel()
+						for i := dec(&n); i >= 0; i = dec(&n) {
+							k := rand.Intn(16)
+							address := sprintf("192.168.0.%d:80", k)
+							c, err := pool.Get(address)
+							assert.Nil(t, err)
+							assert.NotNil(t, c)
+							assert.Nil(t, c.Close())
+						}
+					})
+				}
+			})
+
+			assert.LessOrEqual(t, dialer.totalConn, int64(16*cs.Parallel))
+			assert.Equal(t, dialer.totalConn, int64(pool._size()))
+		})
+	}
+}
+
 func TestPoolNew(t *testing.T) {
 	// Exception case.
-	t.Run("pool.New exception case", func(t *testing.T) {
+	t.Run("exception case", func(t *testing.T) {
 		dialer := &mockDialer{failProb: 1}
 		pool, err := New(dialer.dial, 32, 5*time.Minute)
 		assert.Nil(t, err)
