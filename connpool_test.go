@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2020-01-02
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2020-04-09
+// Last Change: 2020-04-10
 
 package connpool
 
@@ -52,6 +52,18 @@ func TestNew(t *testing.T) {
 }
 
 func TestPoolNew(t *testing.T) {
+	// Exception case.
+	t.Run("pool.New exception case", func(t *testing.T) {
+		dialer := &mockDialer{failProb: 1}
+		pool, err := New(dialer.dial, 32, 5*time.Minute)
+		assert.Nil(t, err)
+		assert.NotNil(t, pool)
+		conn, err := pool.New("192.168.1.1:80")
+		assert.NotNil(t, err)
+		assert.Nil(t, conn)
+	})
+
+	// Normal cases.
 	for _, cs := range []struct {
 		Parallel int `json:"parallel"`
 		NewNum   int `json:"new_num"`
