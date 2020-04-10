@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2020-04-09
+// Last Change: 2020-04-10
 
 // Package connpool implements a concurrency-safe connection pool. It can be used to
 // manage and reuse connections based on the destination address of which. This design
@@ -98,13 +98,14 @@ func New(dial Dial, capacity int, period time.Duration) (*Pool, error) {
 	return pool, nil
 }
 
-// Get a connection from the pool, the destination address of which is equal to
-// the address parameter. If an error happens, the connection returned is nil.
+// Get gets a connection from the pool, the destination address of the connection
+// is equal to the address parameter. If any exception happens, the connection
+// returned is nil.
 func (pool *Pool) Get(address string) (net.Conn, error) {
-	// First, get a connection bucket.
+	// Step 1: Selects a connection bucket.
 	b := pool.selectBucket(address)
 
-	// Second, get a connection from the bucket.
+	// Step 2: Gets a connection from the bucket.
 	conn := b.pop()
 	if conn == nil {
 		// If there is no idle connection in the bucket, we need to invoke the
