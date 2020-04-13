@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2020-04-10
+// Last Change: 2020-04-13
 
 // Package connpool implements a concurrency-safe connection pool. It can be used to
 // manage and reuse connections based on the destination address of which. This design
@@ -232,7 +232,7 @@ func (pool *Pool) selectBucket(address string) (b *bucket) {
 	return
 }
 
-// Cleans up idle connections periodically.
+// autoCleanup cleans up idle connections periodically.
 func (pool *Pool) autoCleanup() {
 	timer := time.NewTimer(pool.period)
 	for {
@@ -254,7 +254,7 @@ func (pool *Pool) autoCleanup() {
 	}
 }
 
-// Cleans up idle connections once.
+// cleanup cleans up idle connections once.
 func (pool *Pool) cleanup(shutdown bool) {
 	pool.rw.RLock()
 	var buckets = make([]*bucket, 0, len(pool.buckets))
@@ -271,8 +271,8 @@ func (pool *Pool) cleanup(shutdown bool) {
 	}
 }
 
-// _wait method sends a signal to users that the pool has been cleaned once,
-// and waits users finish their works. (**only used in testing mode**)
+// _wait sends a signal to users that the pool has been cleaned once and waits
+// users finish their works. (NOTE: Only for testing)
 func (pool *Pool) _wait() {
 	back := make(chan struct{})
 	pool._interrupt <- back
