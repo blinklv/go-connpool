@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2018-07-05
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2020-04-13
+// Last Change: 2020-04-23
 
 // Package connpool implements a concurrency-safe connection pool. It can be used to
 // manage and reuse connections based on the destination address of which. This design
@@ -47,7 +47,7 @@ type Pool struct {
 	closed   bool
 
 	// _interrupt channel is used to notify users the connection pool has
-	// been cleaned once. (**only used in testing mode**)
+	// been cleaned once. (NOTE: Only for testing)
 	_interrupt chan chan struct{}
 }
 
