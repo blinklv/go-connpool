@@ -3,7 +3,7 @@
 // Author: blinklv <blinklv@icloud.com>
 // Create Time: 2020-01-02
 // Maintainer: blinklv <blinklv@icloud.com>
-// Last Change: 2020-04-10
+// Last Change: 2020-04-23
 
 package connpool
 
@@ -13,7 +13,9 @@ import (
 	"math/rand"
 	"net"
 	"reflect"
+	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -221,6 +223,64 @@ func TestPoolClose(t *testing.T) {
 
 	err = pool.Close()
 	assert.EqualError(t, err, "connection pool is already closed")
+}
+
+func TestPoolCleanup(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping test in short mode")
+	}
+
+	// Turn on the test switch.
+	_test = true
+	defer func() {
+		_test = false
+	}()
+
+	const sampleNum = 12
+
+	var (
+		sizeSamples = make([]int, sampleNum)
+		dialer      = &mockDialer{}
+		pool, _     = New(dialer.dial, 512, 5*time.Second)
+		workerNum   = 2048 // 2^12
+	)
+
+	for i := 0; i < sampleNum; i++ {
+		var (
+			wg    = &sync.WaitGroup{}
+			start = make(chan struct{})
+		)
+
+		for k := 0; k < workerNum; k++ {
+			wg.Add(1)
+			go func() {
+				<-start
+				address := sprintf("192.168.0.%d:80", rand.Intn(16))
+				c, _ := pool.Get(address)
+				time.Sleep(time.Second)
+				c.Close()
+				wg.Done()
+			}()
+		}
+
+		close(start)
+		wg.Wait()
+
+		back := <-pool._interrupt
+		sizeSamples[i] = pool._size()
+		close(back)
+
+		workerNum /= 2
+	}
+
+	pool.Close()
+	assert.Equal(t, 0, pool._size())
+	assert.Equal(t, 0, int(dialer.totalConn))
+
+	t.Logf("size samples: %v", sizeSamples)
+
+	// Check whether sizeSamples is sorted in decreasing order.
+	assert.True(t, sort.IsSorted(sort.Reverse(sort.IntSlice(sizeSamples))))
 }
 
 func TestBucketPush(t *testing.T) {
